@@ -1,0 +1,12 @@
+[server]
+bind_address = "127.0.0.1:8080"
+
+[rate_limiting]
+max_requests_per_minute = 5
+
+[backends]
+targets = [
+    "127.0.0.1:9000",
+    "127.0.0.1:9001",
+    "127.0.0.1:9002"
+]
