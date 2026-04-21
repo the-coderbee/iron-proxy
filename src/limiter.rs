@@ -1,29 +1,46 @@
-use std::collections::HashMap;
+use deadpool_redis::{Config, Pool, Runtime};
+use deadpool_redis::redis::AsyncCommands;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
-
+use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct RateLimiter {
-    limits: Arc<Mutex<HashMap<IpAddr, usize>>>,
-    max_requests: usize,
+    pool: Pool,
+    max_requests: u64,
 }
 
 impl RateLimiter {
-    // constructor
-    pub fn new(max_requests: usize) -> Self {
-        Self {
-            limits: Arc::new(Mutex::new(HashMap::new())),
-            max_requests,
-        }
+    pub fn new(redis_url: &str, max_requests: u64) -> Self {
+        let cfg = Config::from_url(redis_url);
+        let pool = cfg.create_pool(Some(Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
+        info!("Distributed Rate Limiter connected to Redis at {}", redis_url);
+        Self { pool, max_requests }
     }
 
-    // core logic. returns true if they are blocked
-    pub fn is_blocked(&self, ip: IpAddr) -> bool {
-        let mut limits = self.limits.lock().unwrap();
-        let count = limits.entry(ip).or_insert(0);
-        *count += 1;
+    pub async fn is_blocked(&self, ip:IpAddr) -> bool {
+        let mut conn = match self.pool.get().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                error!("Redis pool error: {}. Failing to open.", e);
+                return false;
+            }
+        };
 
-        *count > self.max_requests
+        let key = format!("rate_limit:{}", ip);
+
+        let count: u64 = match conn.incr(&key, 1).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Redis INCR error: {}. Failing to open.", e);
+                return false;
+            }
+        };
+
+        if count == 1 {
+            let _: Result<(), _> = conn.expire(&key, 60).await;
+        }
+
+        count > self.max_requests
     }
 }

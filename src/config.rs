@@ -16,7 +16,7 @@ pub struct ServerConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct RateLimitConfig {
-    pub max_requests_per_minute: usize,
+    pub max_requests_per_minute: u64,
 }
 
 #[derive(Deserialize, Debug, Clone)]
