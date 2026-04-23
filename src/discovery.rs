@@ -1,6 +1,6 @@
 use bollard::{Docker, container::ListContainersOptions};
 use bollard::system::EventsOptions;
-use bollard::container::{self, InspectContainerOptions};
+use bollard::container::InspectContainerOptions;
 use futures_util::stream::StreamExt;
 use std::collections::HashMap;
 use tracing::{info, warn, error};
