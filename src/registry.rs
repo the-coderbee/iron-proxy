@@ -23,14 +23,18 @@ impl ProviderRegistry {
     }
 
     pub fn update_static(&self, targets: Vec<String>) {
-        let mut static_lock = self.static_targets.write().unwrap();
-        *static_lock = targets.into_iter().collect();
+        {
+            let mut static_lock = self.static_targets.write().unwrap();
+            *static_lock = targets.into_iter().collect();
+        }
         self.sync();
     }
 
     pub fn update_docker(&self, targets: Vec<String>) {
-        let mut docker_lock = self.docker_targets.write().unwrap();
-        *docker_lock = targets.into_iter().collect();
+        {
+            let mut docker_lock = self.docker_targets.write().unwrap();
+            *docker_lock = targets.into_iter().collect();
+        }
         self.sync();
     }
 
