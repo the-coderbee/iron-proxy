@@ -1,12 +1,10 @@
 use serde::Deserialize;
-use std::fs;
-use std::process;
+use std::env;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Config {
     pub server: ServerConfig,
     pub rate_limiting: RateLimitConfig,
-    pub backends: BackendsConfig,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -19,25 +17,18 @@ pub struct RateLimitConfig {
     pub max_requests_per_minute: u64,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct BackendsConfig {
-    pub targets: Vec<String>,
-}
-
 pub fn load_config() -> Config {
-    let config_content = match fs::read_to_string("gateway_config.toml") {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Failed to read gateway_config.toml: {}", e);
-            process::exit(1);
-        }
-    };
+    // Read from Environment Variables, or fallback to sensible defaults
+    let bind_address = env::var("GATEWAY_BIND_ADDRESS")
+        .unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+        
+    let rate_limit_str = env::var("GATEWAY_RATE_LIMIT")
+        .unwrap_or_else(|_| "100".to_string());
+        
+    let max_requests_per_minute = rate_limit_str.parse().unwrap_or(100);
 
-    match toml::from_str(&config_content) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Failed to parse config file: {}", e);
-            process::exit(1);
-        }
+    Config {
+        server: ServerConfig { bind_address },
+        rate_limiting: RateLimitConfig { max_requests_per_minute },
     }
 }

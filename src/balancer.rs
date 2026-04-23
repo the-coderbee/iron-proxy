@@ -5,16 +5,22 @@ use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
+use metrics::gauge;
+
 // RAII guard
 // when created tracks connection
 pub struct ConnectionTracker {
     counter: Arc<AtomicUsize>,
+    address: String,
 }
 
 impl Drop for ConnectionTracker {
     fn drop(&mut self) {
         // automatically subtract 1 when user disconnects or task finishes.
         self.counter.fetch_sub(1, Ordering::SeqCst);
+
+        gauge!("gateway_active_connections").decrement(1.0);
+        gauge!("backend_active_connections", "server" => self.address.clone()).decrement(1.0);
     }
 }
 
@@ -72,11 +78,18 @@ impl LeastConnections {
         let backends = self.backends.read().unwrap();
 
         let best_backend = backends.iter().filter(|b| b.is_healthy).min_by_key(|b| b.active_connections.load(Ordering::Relaxed));
-
+        
         if let Some(backend) = best_backend {
             backend.active_connections.fetch_add(1, Ordering::SeqCst);
 
-            let tracker = ConnectionTracker { counter: backend.active_connections.clone() };
+            // 2. THE FIX: Make sure BOTH of these lines exist!
+            gauge!("gateway_active_connections").increment(1.0);
+            gauge!("backend_active_connections", "server" => backend.address.clone()).increment(1.0);
+            
+            let tracker = ConnectionTracker { 
+                counter: backend.active_connections.clone(),
+                address: backend.address.clone(),
+            };
             return Some((backend.address.clone(), tracker));
         }
         None
