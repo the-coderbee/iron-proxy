@@ -3,7 +3,7 @@ use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct ProxyConfig {
-    pub server : ServerConfig,
+    pub server: ServerConfig,
     // TODO: we work on this when we build l4/l7 pools
 }
 

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use tracing::{info, error};
 use std::process;
+use tracing::{error, info};
 
 #[derive(Parser)]
 #[command(author, version, about = "Iron-Proxy: High-performance load balancer")]
@@ -35,8 +35,11 @@ async fn main() {
             info!("Starting Iron-Proxy...");
             match config::load_config(config) {
                 Ok(cfg) => {
-                    info!("Loaded config: Binding to {}:{}", cfg.server.bind_addr, cfg.server.port);
-                    // TODO: Initialize TCP listener 
+                    info!(
+                        "Loaded config: Binding to {}:{}",
+                        cfg.server.bind_addr, cfg.server.port
+                    );
+                    // TODO: Initialize TCP listener
                 }
                 Err(e) => {
                     error!("Failed to load config: {}", e);
