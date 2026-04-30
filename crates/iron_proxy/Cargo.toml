@@ -1,0 +1,11 @@
+[package]
+name = "iron_proxy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+observability = {path = "../observability"}
+config = {path = "../config"}
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
