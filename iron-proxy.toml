@@ -1,3 +1,12 @@
 [server]
 bind_addr = "127.0.0.1"
 port = 8080
+
+[[clusters]]
+name = "main_web_pool"
+mode = "tcp"
+routing_strategy = "round_robin"
+targets = [
+    "127.0.0.1:8081",
+    "127.0.0.1:8082"
+]

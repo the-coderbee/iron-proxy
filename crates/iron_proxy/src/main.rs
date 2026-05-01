@@ -35,11 +35,11 @@ async fn main() {
             info!("Starting Iron-Proxy...");
             match config::load_config(config) {
                 Ok(cfg) => {
-                    info!(
-                        "Loaded config: Binding to {}:{}",
-                        cfg.server.bind_addr, cfg.server.port
-                    );
-                    // TODO: Initialize TCP listener
+                    let proxy = proxy_l4::L4Proxy::new(cfg);
+                    if let Err(e) = proxy.run().await {
+                        error!("Proxy failed: {}", e);
+                        std::process::exit(1);
+                    }
                 }
                 Err(e) => {
                     error!("Failed to load config: {}", e);

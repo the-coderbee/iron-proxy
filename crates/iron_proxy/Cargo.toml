@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-observability = {path = "../observability"}
-config = {path = "../config"}
+observability = { path = "../observability" }
+config = { path = "../config" }
+proxy_l4 = { path = "../proxy_l4" }
 clap.workspace = true
 tokio.workspace = true
 tracing.workspace = true

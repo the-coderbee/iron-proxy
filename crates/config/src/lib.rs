@@ -4,13 +4,42 @@ use std::path::Path;
 #[derive(Debug, Deserialize)]
 pub struct ProxyConfig {
     pub server: ServerConfig,
-    // TODO: we work on this when we build l4/l7 pools
+    pub admin: Option<AdminConfig>,
+    // we expect a list of backend clusters
+    #[serde(default)]
+    pub clusters: Vec<ClusterConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ServerConfig {
     pub bind_addr: String,
     pub port: u16,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminConfig {
+    pub enabled: bool,
+    pub port: u16,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClusterConfig {
+    pub name: String,
+    pub mode: ProxyMode,
+    #[serde(default = "default_routing")]
+    pub routing_strategy: String,
+    pub targets: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyMode {
+    Tcp,
+    Http,
+}
+
+fn default_routing() -> String {
+    "round_robin".to_string()
 }
 
 pub fn load_config<P: AsRef<Path>>(path: P) -> Result<ProxyConfig, Box<dyn std::error::Error>> {

@@ -1,7 +1,5 @@
 [workspace]
-members = [
-    "crates/*"
-]
+members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
@@ -12,9 +10,10 @@ repository = "https://github.com/the-coderbee/iron-proxy"
 license = "MIT"
 
 [workspace.dependencies]
-tokio = {version = "1", features = ["full"]}
+tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
-tracing-subscriber = {version = "0.3", features = ["env-filter", "fmt"]}
-clap = {version = "4.4", features = ["derive"]}
-serde = {version = "1.0", features = ["derive"]}
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4.4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+async-trait = "0.1.80"
