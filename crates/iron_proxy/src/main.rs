@@ -35,7 +35,9 @@ async fn main() {
             info!("Starting Iron-Proxy...");
             match config::load_config(config) {
                 Ok(cfg) => {
-                    let proxy = proxy_l4::L4Proxy::new(cfg);
+                    // temporarily testing l7 proxy
+                    info!("Initializing L7 HTTP Engine...");
+                    let proxy = std::sync::Arc::new(proxy_l7::L7Proxy::new(cfg));
                     if let Err(e) = proxy.run().await {
                         error!("Proxy failed: {}", e);
                         std::process::exit(1);

@@ -7,6 +7,7 @@ edition.workspace = true
 observability = { path = "../observability" }
 config = { path = "../config" }
 proxy_l4 = { path = "../proxy_l4" }
+proxy_l7 = { path = "../proxy_l7" }
 clap.workspace = true
 tokio.workspace = true
 tracing.workspace = true

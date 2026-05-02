@@ -5,5 +5,10 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
-serde.workspace = true
-toml.workspace = true
+config = { path = "../config" }
+tokio.workspace = true
+tracing.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
