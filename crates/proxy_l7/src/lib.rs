@@ -162,11 +162,11 @@ impl L7Proxy {
                 // strip hop-by-hop headers
                 // we also clean response before sending it to client
                 let res_headers = response.headers_mut();
-                if let Some(conn_header) = res_headers.get(hyper::header::CONNECTION).cloned() {
-                    if let Ok(conn_str) = conn_header.to_str() {
-                        for h in conn_str.split(',') {
-                            res_headers.remove(h.trim());
-                        }
+                if let Some(conn_header) = res_headers.get(hyper::header::CONNECTION).cloned()
+                    && let Ok(conn_str) = conn_header.to_str()
+                {
+                    for h in conn_str.split(',') {
+                        res_headers.remove(h.trim());
                     }
                 }
                 for header in &hop_by_hop {
