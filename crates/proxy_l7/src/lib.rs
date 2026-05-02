@@ -90,11 +90,11 @@ impl L7Proxy {
         let headers = req.headers_mut();
 
         // remove headers explicitly listed in the 'Connection' header
-        if let Some(conn_header) = headers.get(hyper::header::CONNECTION).cloned() {
-            if let Ok(conn_str) = conn_header.to_str() {
-                for h in conn_str.split(',') {
-                    headers.remove(h.trim());
-                }
+        if let Some(conn_header) = headers.get(hyper::header::CONNECTION).cloned()
+            && let Ok(conn_str) = conn_header.to_str()
+        {
+            for h in conn_str.split(',') {
+                headers.remove(h.trim());
             }
         }
 
