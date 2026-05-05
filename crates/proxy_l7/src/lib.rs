@@ -1,4 +1,5 @@
 use config::ProxyConfig;
+use health::HealthRegistry;
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
@@ -13,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 // a type alias for our http client to keep code clean
 type HttpClient = Client<HttpConnector, Incoming>;
@@ -36,45 +37,31 @@ fn text_body(text: &'static str) -> BoxBody<Bytes, hyper::Error> {
 
 pub struct L7Proxy {
     config: Arc<ProxyConfig>,
-    backends: Vec<SocketAddr>,
+    registry: HealthRegistry,
     current_backend: AtomicUsize,
     client: HttpClient,
 }
 
 impl L7Proxy {
-    pub fn new(config: ProxyConfig) -> Self {
-        let targets = config
-            .clusters
-            .first()
-            .map(|c| c.targets.clone())
-            .unwrap_or_default();
-
-        let mut backends = Vec::new();
-        for target in targets {
-            match target.parse::<SocketAddr>() {
-                Ok(addr) => backends.push(addr),
-                Err(e) => error!("Failed to parse backend address '{}':{}", target, e),
-            }
-        }
-
+    pub fn new(config: ProxyConfig, registry: HealthRegistry) -> Self {
         // initialize the connection-pooling HTTP client
         let client = Client::builder(TokioExecutor::new()).build_http();
 
         Self {
             config: Arc::new(config),
-            backends,
+            registry,
             current_backend: AtomicUsize::new(0),
             client,
         }
     }
 
-    fn get_next_backend(&self) -> SocketAddr {
-        if self.backends.is_empty() {
-            panic!("Attempted to route traffic with an empty backend pool");
+    async fn get_next_backend(&self) -> Option<SocketAddr> {
+        let healthy_backends = self.registry.get_healthy_backends().await;
+        if healthy_backends.is_empty() {
+            return None;
         }
-
         let idx = self.current_backend.fetch_add(1, Ordering::Relaxed);
-        self.backends[idx % self.backends.len()]
+        Some(healthy_backends[idx % healthy_backends.len()])
     }
 
     // this is our core http handler. right now it just returms a 502.
@@ -82,9 +69,22 @@ impl L7Proxy {
     async fn handle_request(
         mut req: Request<hyper::body::Incoming>,
         client_addr: SocketAddr,
-        backend_addr: SocketAddr,
+        backend_addr_opt: Option<SocketAddr>,
         client: HttpClient,
+        registry: HealthRegistry,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
+        // first check if any backends are available
+        let backend_addr = match backend_addr_opt {
+            Some(addr) => addr,
+            None => {
+                error!("No healthy backends available");
+                let mut error_response =
+                    Response::new(text_body("Iron-Proxy: 503 Service Unavailable"));
+                *error_response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+                return Ok(error_response);
+            }
+        };
+
         info!("Routing {} {} to {}", req.method(), req.uri(), backend_addr);
 
         let headers = req.headers_mut();
@@ -178,6 +178,12 @@ impl L7Proxy {
             Err(e) => {
                 error!("Failed to forward request to {}: {}", backend_addr, e);
 
+                // passive health check. instantly mark the server as dead
+                warn!("Passive check tripped! Marking {} as DEAD", backend_addr);
+                registry
+                    .set_status(backend_addr, health::HealthStatus::Dead)
+                    .await;
+
                 let mut err_response = Response::new(text_body("Iron-Proxy: 502 Bad Gateway"));
                 *err_response.status_mut() = StatusCode::BAD_GATEWAY;
                 Ok(err_response)
@@ -185,7 +191,7 @@ impl L7Proxy {
         }
     }
 
-    pub async fn run(&self) -> std::io::Result<()> {
+    pub async fn run(self: Arc<Self>) -> std::io::Result<()> {
         let bind_addr = format!(
             "{}:{}",
             self.config.server.bind_addr, self.config.server.port
@@ -199,28 +205,29 @@ impl L7Proxy {
         loop {
             match listener.accept().await {
                 Ok((stream, client_addr)) => {
-                    if self.backends.is_empty() {
-                        error!(
-                            "Dropping connection from {}: no backends available",
-                            client_addr
-                        );
-                        continue;
-                    }
-
-                    let backend_addr = self.get_next_backend();
                     let client = self.client.clone();
 
                     // hyper 1.0 requires wrapping the tokio stream in TokioIO
                     let io = TokioIo::new(stream);
 
+                    let proxy = self.clone();
+                    let registry_clone = self.registry.clone();
                     active_connections.spawn(async move {
+                        // fetch healthy backends asynchronously inside tha task
+                        let backend_addr_opt = proxy.get_next_backend().await;
+
                         let service = service_fn(move |req| {
-                            Self::handle_request(req, client_addr, backend_addr, client.clone())
+                            Self::handle_request(
+                                req,
+                                client_addr,
+                                backend_addr_opt,
+                                client.clone(),
+                                registry_clone.clone(),
+                            )
                         });
 
-                        if let Err(err) = http1::Builder::new().serve_connection(io, service).await
-                        {
-                            error!("Error serving connection: {:?}", err);
+                        if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                            error!("Error serving connection: {:?}", e);
                         }
                     });
                 }

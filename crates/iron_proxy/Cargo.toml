@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 observability = { path = "../observability" }
 config = { path = "../config" }
+health = { path = "../health" }
 proxy_l4 = { path = "../proxy_l4" }
 proxy_l7 = { path = "../proxy_l7" }
 clap.workspace = true

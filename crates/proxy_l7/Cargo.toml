@@ -6,6 +6,7 @@ authors.workspace = true
 
 [dependencies]
 config = { path = "../config" }
+health ={ path = "../health" }
 tokio.workspace = true
 tracing.workspace = true
 hyper.workspace = true

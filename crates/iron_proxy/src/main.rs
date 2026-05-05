@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use std::process;
+use std::{process, time::Duration};
 use tracing::{error, info};
 
 #[derive(Parser)]
@@ -35,9 +35,30 @@ async fn main() {
             info!("Starting Iron-Proxy...");
             match config::load_config(config) {
                 Ok(cfg) => {
-                    // temporarily testing l7 proxy
-                    info!("Initializing L7 HTTP Engine...");
-                    let proxy = std::sync::Arc::new(proxy_l7::L7Proxy::new(cfg));
+                    // extract backend targets from config
+                    let targets = cfg
+                        .clusters
+                        .first()
+                        .map(|c| c.targets.clone())
+                        .unwrap_or_default();
+
+                    let mut backends = Vec::new();
+                    for target in targets {
+                        if let Ok(addr) = target.parse::<std::net::SocketAddr>() {
+                            backends.push(addr);
+                        }
+                    }
+
+                    // initialize health registry
+                    let registry = health::HealthRegistry::new(&backends);
+
+                    health::start_health_check_loop(registry.clone(), Duration::from_secs(5));
+
+                    info!("Initializing L7 HTTP Engine with active health checks...");
+
+                    // pass the registry to the new L7 Proxy
+                    let proxy = std::sync::Arc::new(proxy_l7::L7Proxy::new(cfg, registry));
+
                     if let Err(e) = proxy.run().await {
                         error!("Proxy failed: {}", e);
                         std::process::exit(1);
