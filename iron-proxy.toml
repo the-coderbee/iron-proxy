@@ -2,11 +2,12 @@
 bind_addr = "127.0.0.1"
 port = 8080
 
+[server.tls]
+cert_path = "certs/cert.pem"
+key_path = "certs/key.pem"
+
 [[clusters]]
 name = "main_web_pool"
 mode = "tcp"
 routing_strategy = "round_robin"
-targets = [
-    "127.0.0.1:8081",
-    "127.0.0.1:8082"
-]
+targets = ["127.0.0.1:8081", "127.0.0.1:8082"]

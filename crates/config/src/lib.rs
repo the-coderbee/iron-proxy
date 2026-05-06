@@ -14,6 +14,13 @@ pub struct ProxyConfig {
 pub struct ServerConfig {
     pub bind_addr: String,
     pub port: u16,
+    pub tls: Option<TlsConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TlsConfig {
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 #[derive(Debug, Deserialize)]

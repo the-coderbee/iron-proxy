@@ -22,3 +22,6 @@ hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 bytes = "1.5"                                                              # hyper uses bytes for zero copy management
 reqwest = { version = "0.11", features = ["rustls-tls"] }
+rustls = "0.23"
+tokio-rustls = "0.26"
+rustls-pemfile = "2.1"

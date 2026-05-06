@@ -8,7 +8,10 @@ use hyper::{Request, Response, StatusCode, Uri};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::convert::Infallible;
+use std::fs::File;
+use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,6 +36,24 @@ fn text_body(text: &'static str) -> BoxBody<Bytes, hyper::Error> {
     Full::new(Bytes::from(text))
         .map_err(|never| match never {})
         .boxed()
+}
+
+// TLS helper function
+fn load_certs(path: &str) -> std::io::Result<Vec<CertificateDer<'static>>> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    rustls_pemfile::certs(&mut reader).collect::<std::io::Result<Vec<_>>>()
+}
+
+fn load_private_key(path: &str) -> std::io::Result<PrivateKeyDer<'static>> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    rustls_pemfile::private_key(&mut reader)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "No private key found in file",
+        )
+    })
 }
 
 pub struct L7Proxy {
@@ -133,6 +154,11 @@ impl L7Proxy {
             );
         }
 
+        headers.insert(
+            "x-forwarded-proto",
+            hyper::header::HeaderValue::from_static("https"),
+        );
+
         // rewrite uri and host
         let path_and_query = req
             .uri()
@@ -198,7 +224,31 @@ impl L7Proxy {
         );
         let listener = TcpListener::bind(&bind_addr).await?;
 
-        info!("L7 (HTTP) Proxy listening on {}", bind_addr);
+        // TLS config setup
+        let tls_acceptor = if let Some(tls_config) = &self.config.server.tls {
+            info!("Loading TLS certificates from {}", tls_config.cert_path);
+            let certs = load_certs(&tls_config.cert_path)?;
+            let key = load_private_key(&tls_config.key_path)?;
+
+            let mut server_config = rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(certs, key)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+            // enable ALPN to negotiate HTTP/1.1
+            server_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+            info!("TLS configured successfully!");
+            Some(tokio_rustls::TlsAcceptor::from(Arc::new(server_config)))
+        } else {
+            None
+        };
+
+        info!(
+            "L7 (HTTP) Proxy listening on {} (TLS: {})",
+            bind_addr,
+            tls_acceptor.is_some()
+        );
 
         let mut active_connections = JoinSet::new();
 
@@ -207,11 +257,10 @@ impl L7Proxy {
                 Ok((stream, client_addr)) => {
                     let client = self.client.clone();
 
-                    // hyper 1.0 requires wrapping the tokio stream in TokioIO
-                    let io = TokioIo::new(stream);
-
                     let proxy = self.clone();
                     let registry_clone = self.registry.clone();
+                    let tls_acceptor_clone = tls_acceptor.clone();
+
                     active_connections.spawn(async move {
                         // fetch healthy backends asynchronously inside tha task
                         let backend_addr_opt = proxy.get_next_backend().await;
@@ -226,8 +275,29 @@ impl L7Proxy {
                             )
                         });
 
-                        if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                            error!("Error serving connection: {:?}", e);
+                        // branch execution based on whether TLS in enabled
+                        if let Some(acceptor) = tls_acceptor_clone {
+                            // perform the TLS handshake
+                            match acceptor.accept(stream).await {
+                                Ok(tls_stream) => {
+                                    let io = TokioIo::new(tls_stream);
+                                    if let Err(e) =
+                                        http1::Builder::new().serve_connection(io, service).await
+                                    {
+                                        error!("Error serving TLS connection: {:?}", e);
+                                    }
+                                }
+                                Err(e) => error!("TLS handshake failed for {}: {}", client_addr, e),
+                            }
+                        } else {
+                            // standard plain http
+                            // hyper 1.0 requires wrapping the tokio stream in TokioIO
+                            let io = TokioIo::new(stream);
+                            if let Err(e) =
+                                http1::Builder::new().serve_connection(io, service).await
+                            {
+                                error!("Error serving TCP connection: {:?}", e);
+                            }
                         }
                     });
                 }
