@@ -26,8 +26,10 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
-    observability::init_tracing();
+    // boot json logging engine
+    observability::init_telemetry();
 
+    // parse CLI args
     let cli = Cli::parse();
 
     match &cli.command {

@@ -15,6 +15,7 @@ use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
@@ -94,6 +95,10 @@ impl L7Proxy {
         client: HttpClient,
         registry: HealthRegistry,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
+        let start_time = Instant::now();
+        // generate uuid
+        let request_id = uuid::Uuid::new_v4().to_string();
+
         // first check if any backends are available
         let backend_addr = match backend_addr_opt {
             Some(addr) => addr,
@@ -159,6 +164,11 @@ impl L7Proxy {
             hyper::header::HeaderValue::from_static("https"),
         );
 
+        headers.insert(
+            "x-request-id",
+            hyper::header::HeaderValue::from_str(&request_id).unwrap(),
+        );
+
         // rewrite uri and host
         let path_and_query = req
             .uri()
@@ -176,18 +186,32 @@ impl L7Proxy {
             hyper::header::HeaderValue::from_str(&backend_addr.to_string()).unwrap(),
         );
 
+        let req_method = req.method().clone();
+        let req_path = req.uri().path().to_string();
+
         // forward to backend
         match client.request(req).await {
             Ok(mut response) => {
+                let latency = start_time.elapsed();
                 info!(
-                    "Backend {} responded with {}",
-                    backend_addr,
-                    response.status()
+                    request_id = %request_id,
+                    method = %req_method,
+                    path = %req_path,
+                    status = response.status().as_u16(),
+                    latency = latency.as_millis(),
+                    backend = %backend_addr,
+                    client_ip = %client_addr.ip(),
+                    "Request completed successfully"
                 );
 
                 // strip hop-by-hop headers
                 // we also clean response before sending it to client
                 let res_headers = response.headers_mut();
+
+                res_headers.insert(
+                    "x-request-id",
+                    hyper::header::HeaderValue::from_str(&request_id).unwrap(),
+                );
                 if let Some(conn_header) = res_headers.get(hyper::header::CONNECTION).cloned()
                     && let Ok(conn_str) = conn_header.to_str()
                 {

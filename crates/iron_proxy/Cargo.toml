@@ -12,3 +12,4 @@ proxy_l7 = { path = "../proxy_l7" }
 clap.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
