@@ -112,19 +112,18 @@ impl L7Proxy {
         let request_id = uuid::Uuid::new_v4().to_string();
 
         // rate limiting shield
-        if let Some(limiter) = &rate_limiter {
-            if !limiter.check(client_addr.ip()).await {
-                warn!(
-                    request_id = %request_id,
-                    client_ip = %client_addr.ip(),
-                    "Rate Limit Exceeded! Dropping request."
-                );
+        if let Some(limiter) = &rate_limiter
+            && !limiter.check(client_addr.ip()).await
+        {
+            warn!(
+                request_id = %request_id,
+                client_ip = %client_addr.ip(),
+                "Rate Limit Exceeded! Dropping request."
+            );
 
-                let mut error_response =
-                    Response::new(text_body("Iron-Proxy: 429 Too Many Requests"));
-                *error_response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
-                return Ok(error_response);
-            }
+            let mut error_response = Response::new(text_body("Iron-Proxy: 429 Too Many Requests"));
+            *error_response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+            return Ok(error_response);
         }
 
         // first check if any backends are available

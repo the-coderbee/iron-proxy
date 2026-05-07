@@ -37,6 +37,10 @@ jobs:
 
   security-audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - name: Audit dependencies
