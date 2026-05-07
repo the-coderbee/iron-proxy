@@ -1,3 +1,4 @@
+use arc_swap::ArcSwap;
 use config::ProxyConfig;
 use health::HealthRegistry;
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
@@ -8,12 +9,14 @@ use hyper::{Request, Response, StatusCode, Uri};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use rate_limit::RateLimiter;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::convert::Infallible;
 use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -59,7 +62,7 @@ fn load_private_key(path: &str) -> std::io::Result<PrivateKeyDer<'static>> {
 }
 
 pub struct L7Proxy {
-    config: Arc<ProxyConfig>,
+    config: Arc<ArcSwap<ProxyConfig>>,
     registry: HealthRegistry,
     current_backend: AtomicUsize,
     client: HttpClient,
@@ -80,7 +83,7 @@ impl L7Proxy {
             RateLimiter::new(rl.capacity, rl.refill_rate)
         });
         Self {
-            config: Arc::new(config),
+            config: Arc::new(ArcSwap::from_pointee(config)),
             registry,
             current_backend: AtomicUsize::new(0),
             client,
@@ -269,14 +272,12 @@ impl L7Proxy {
     }
 
     pub async fn run(self: Arc<Self>) -> std::io::Result<()> {
-        let bind_addr = format!(
-            "{}:{}",
-            self.config.server.bind_addr, self.config.server.port
-        );
+        let cfg = self.config.load();
+        let bind_addr = format!("{}:{}", cfg.server.bind_addr, cfg.server.port);
         let listener = TcpListener::bind(&bind_addr).await?;
 
         // TLS config setup
-        let tls_acceptor = if let Some(tls_config) = &self.config.server.tls {
+        let tls_acceptor = if let Some(tls_config) = &cfg.server.tls {
             info!("Loading TLS certificates from {}", tls_config.cert_path);
             // we explicitly install the ring crypto provider for the process
             let _ = rustls::crypto::ring::default_provider().install_default();
@@ -307,58 +308,102 @@ impl L7Proxy {
         let mut active_connections = JoinSet::new();
 
         loop {
-            match listener.accept().await {
-                Ok((stream, client_addr)) => {
-                    let client = self.client.clone();
+            tokio::select! {
+                // event 1: a new client connects
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok((stream, client_addr)) => {
+                            let client = self.client.clone();
 
-                    let proxy = self.clone();
-                    let registry_clone = self.registry.clone();
-                    let rate_limiter_clone = self.rate_limiter.clone();
-                    let tls_acceptor_clone = tls_acceptor.clone();
+                            let proxy = self.clone();
+                            let registry_clone = self.registry.clone();
+                            let rate_limiter_clone = self.rate_limiter.clone();
+                            let tls_acceptor_clone = tls_acceptor.clone();
 
-                    active_connections.spawn(async move {
-                        // fetch healthy backends asynchronously inside tha task
-                        let backend_addr_opt = proxy.get_next_backend().await;
+                            active_connections.spawn(async move {
+                                // fetch healthy backends asynchronously inside tha task
+                                let backend_addr_opt = proxy.get_next_backend().await;
 
-                        let service = service_fn(move |req| {
-                            Self::handle_request(
-                                req,
-                                client_addr,
-                                backend_addr_opt,
-                                client.clone(),
-                                registry_clone.clone(),
-                                rate_limiter_clone.clone(),
-                            )
-                        });
+                                let service = service_fn(move |req| {
+                                    Self::handle_request(
+                                        req,
+                                        client_addr,
+                                        backend_addr_opt,
+                                        client.clone(),
+                                        registry_clone.clone(),
+                                        rate_limiter_clone.clone(),
+                                    )
+                                });
 
-                        // branch execution based on whether TLS in enabled
-                        if let Some(acceptor) = tls_acceptor_clone {
-                            // perform the TLS handshake
-                            match acceptor.accept(stream).await {
-                                Ok(tls_stream) => {
-                                    let io = TokioIo::new(tls_stream);
-                                    if let Err(e) =
-                                        http1::Builder::new().serve_connection(io, service).await
-                                    {
-                                        error!("Error serving TLS connection: {:?}", e);
+                                // branch execution based on whether TLS in enabled
+                                if let Some(acceptor) = tls_acceptor_clone {
+                                    if let Ok(tls_stream) = acceptor.accept(stream).await {
+                                        let io = TokioIo::new(tls_stream);
+                                        let _ = http1::Builder::new().serve_connection(io, service).await;
                                     }
+                                } else {
+                                    let io = TokioIo::new(stream);
+                                    let _ = http1::Builder::new().serve_connection(io, service).await;
                                 }
-                                Err(e) => error!("TLS handshake failed for {}: {}", client_addr, e),
-                            }
-                        } else {
-                            // standard plain http
-                            // hyper 1.0 requires wrapping the tokio stream in TokioIO
-                            let io = TokioIo::new(stream);
-                            if let Err(e) =
-                                http1::Builder::new().serve_connection(io, service).await
-                            {
-                                error!("Error serving TCP connection: {:?}", e);
-                            }
+                            });
                         }
-                    });
+                        Err(e) => error!("Failed to accept connection: {}", e),
+                    }
                 }
-                Err(e) => error!("Failed to accept connection: {}", e),
+
+                // event 2: admin presses ctrl+c
+                _ = tokio::signal::ctrl_c() => {
+                    info!("SIGTERM received! Stopping traffic intake.");
+                    break;
+                }
             }
         }
+        info!(
+            "Waiting for {} active connections to drain...",
+            active_connections.len()
+        );
+        while let Some(_) = active_connections.join_next().await {}
+        info!("All connections cleanly drained. Iron-Proxy shutting down.");
+
+        Ok(())
+    }
+
+    pub fn watch_config(self: Arc<Self>, config_path: String) {
+        tokio::spawn(async move {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+            let mut watcher = RecommendedWatcher::new(
+                move |res| {
+                    let _ = tx.send(res);
+                },
+                Config::default(),
+            )
+            .unwrap();
+
+            watcher
+                .watch(Path::new(&config_path), RecursiveMode::NonRecursive)
+                .unwrap();
+            info!("Watching {} for hot-reloads...", config_path);
+
+            while let Some(res) = rx.recv().await {
+                match res {
+                    Ok(event) => {
+                        if event.kind.is_modify() {
+                            info!("Config modification detected! Reloading...");
+                            match ::config::load_config(&config_path) {
+                                Ok(new_cfg) => {
+                                    self.config.store(Arc::new(new_cfg));
+                                    info!("Hot-reload successful! New routing rules applied.");
+                                }
+                                Err(e) => {
+                                    error!("Failed to hot-reload config: {}. Keeping old rules.", e)
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => error!("Watch error: {:?}", e),
+                }
+            }
+        });
     }
 }

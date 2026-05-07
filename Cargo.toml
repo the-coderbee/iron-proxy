@@ -28,3 +28,5 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2.1"
 uuid = { version = "1.8", features = ["v4"] }
 axum = "0.7"
+arc-swap = "1.7"
+notify = "6.1"

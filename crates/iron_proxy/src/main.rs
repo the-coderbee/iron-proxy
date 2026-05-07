@@ -78,6 +78,9 @@ async fn main() {
                     // Start the Data Plane
                     let proxy = std::sync::Arc::new(proxy_l7::L7Proxy::new(cfg, registry));
 
+                    // start watching the config file
+                    proxy.clone().watch_config(config.clone());
+
                     if let Err(e) = proxy.run().await {
                         error!("Proxy failed: {}", e);
                         std::process::exit(1);
