@@ -278,6 +278,9 @@ impl L7Proxy {
         // TLS config setup
         let tls_acceptor = if let Some(tls_config) = &self.config.server.tls {
             info!("Loading TLS certificates from {}", tls_config.cert_path);
+            // we explicitly install the ring crypto provider for the process
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
             let certs = load_certs(&tls_config.cert_path)?;
             let key = load_private_key(&tls_config.key_path)?;
 

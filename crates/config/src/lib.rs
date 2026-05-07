@@ -30,9 +30,9 @@ pub struct TlsConfig {
     pub key_path: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct AdminConfig {
-    pub enabled: bool,
+    pub bind_addr: String,
     pub port: u16,
 }
 

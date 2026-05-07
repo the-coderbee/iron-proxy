@@ -17,6 +17,12 @@ enum Commands {
         #[arg(short, long, default_value = "iron-proxy.toml")]
         config: String,
     },
+
+    // Get real time health status of the cluster
+    Status {
+        #[arg(long, default_value = "http://127.0.0.1:9090")]
+        admin_url: String,
+    },
     // Validate the configuration file
     Check {
         #[arg(short, long, default_value = "iron-proxy.toml")]
@@ -54,11 +60,22 @@ async fn main() {
                     // initialize health registry
                     let registry = health::HealthRegistry::new(&backends);
 
+                    // start background health checker
                     health::start_health_check_loop(registry.clone(), Duration::from_secs(5));
+
+                    // start Admin API Control Plane
+                    if let Some(admin_cfg) = cfg.admin.clone() {
+                        let admin_registry = registry.clone();
+                        tokio::spawn(async move {
+                            admin::start_admin_server(admin_cfg, admin_registry).await;
+                        });
+                    } else {
+                        info!("No [admin] block found in config. Control Plane disabled.");
+                    }
 
                     info!("Initializing L7 HTTP Engine with active health checks...");
 
-                    // pass the registry to the new L7 Proxy
+                    // Start the Data Plane
                     let proxy = std::sync::Arc::new(proxy_l7::L7Proxy::new(cfg, registry));
 
                     if let Err(e) = proxy.run().await {
@@ -69,6 +86,46 @@ async fn main() {
                 Err(e) => {
                     error!("Failed to load config: {}", e);
                     process::exit(1);
+                }
+            }
+        }
+
+        Commands::Status { admin_url } => {
+            let url = format!("{}/api/v1/health", admin_url);
+            println!("Fetching cluster status from {}", url);
+
+            match reqwest::get(&url).await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        let text = response.text().await.unwrap_or_default();
+
+                        // parse the json into a generic value for easy reading
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            let status = json["status"].as_str().unwrap_or("Unknown");
+
+                            println!("CLUSTER STATUS: {}", status);
+                            println!("-----------------------------------------------");
+
+                            if let Some(backends) = json["backends"].as_object() {
+                                for (addr, state) in backends {
+                                    let state_str = state.as_str().unwrap_or("Unknown");
+                                    let icon = if state_str == "Healthy" { "✅" } else { "❌" };
+                                    println!("{} {} ({})", icon, addr, state_str);
+                                }
+                            }
+                            println!("-----------------------------------------------");
+                        } else {
+                            error!("Failed to parse response from Admin API.");
+                        }
+                    } else {
+                        error!("Admin API returned an error: {}", response.status());
+                    }
+                }
+                Err(_) => {
+                    error!("Failed to connect to Admin API");
+                    error!(
+                        "Is Iron-Proxy running, and is the [admin] block configured in your TOML?"
+                    );
                 }
             }
         }

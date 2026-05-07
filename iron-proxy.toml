@@ -10,6 +10,10 @@ key_path = "certs/key.pem"
 capacity = 5.0
 refill_rate = 1.0
 
+[admin]
+bind_addr = "127.0.0.1"
+port = 9090
+
 [[clusters]]
 name = "main_web_pool"
 mode = "tcp"
