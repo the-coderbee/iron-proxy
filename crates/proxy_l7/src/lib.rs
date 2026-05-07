@@ -8,6 +8,7 @@ use hyper::{Request, Response, StatusCode, Uri};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use rate_limit::RateLimiter;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::convert::Infallible;
 use std::fs::File;
@@ -62,6 +63,7 @@ pub struct L7Proxy {
     registry: HealthRegistry,
     current_backend: AtomicUsize,
     client: HttpClient,
+    rate_limiter: Option<RateLimiter>,
 }
 
 impl L7Proxy {
@@ -69,11 +71,20 @@ impl L7Proxy {
         // initialize the connection-pooling HTTP client
         let client = Client::builder(TokioExecutor::new()).build_http();
 
+        // check if rate limiting is enabled in cofig
+        let rate_limiter = config.rate_limit.as_ref().map(|rl| {
+            info!(
+                "Rate Limiting enabled: {} bursts, {}/sec refill",
+                rl.capacity, rl.refill_rate
+            );
+            RateLimiter::new(rl.capacity, rl.refill_rate)
+        });
         Self {
             config: Arc::new(config),
             registry,
             current_backend: AtomicUsize::new(0),
             client,
+            rate_limiter,
         }
     }
 
@@ -94,10 +105,27 @@ impl L7Proxy {
         backend_addr_opt: Option<SocketAddr>,
         client: HttpClient,
         registry: HealthRegistry,
+        rate_limiter: Option<RateLimiter>,
     ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, Infallible> {
         let start_time = Instant::now();
         // generate uuid
         let request_id = uuid::Uuid::new_v4().to_string();
+
+        // rate limiting shield
+        if let Some(limiter) = &rate_limiter {
+            if !limiter.check(client_addr.ip()).await {
+                warn!(
+                    request_id = %request_id,
+                    client_ip = %client_addr.ip(),
+                    "Rate Limit Exceeded! Dropping request."
+                );
+
+                let mut error_response =
+                    Response::new(text_body("Iron-Proxy: 429 Too Many Requests"));
+                *error_response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+                return Ok(error_response);
+            }
+        }
 
         // first check if any backends are available
         let backend_addr = match backend_addr_opt {
@@ -283,6 +311,7 @@ impl L7Proxy {
 
                     let proxy = self.clone();
                     let registry_clone = self.registry.clone();
+                    let rate_limiter_clone = self.rate_limiter.clone();
                     let tls_acceptor_clone = tls_acceptor.clone();
 
                     active_connections.spawn(async move {
@@ -296,6 +325,7 @@ impl L7Proxy {
                                 backend_addr_opt,
                                 client.clone(),
                                 registry_clone.clone(),
+                                rate_limiter_clone.clone(),
                             )
                         });
 

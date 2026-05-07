@@ -5,9 +5,16 @@ use std::path::Path;
 pub struct ProxyConfig {
     pub server: ServerConfig,
     pub admin: Option<AdminConfig>,
+    pub rate_limit: Option<RateLimitConfig>,
     // we expect a list of backend clusters
     #[serde(default)]
     pub clusters: Vec<ClusterConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct RateLimitConfig {
+    pub capacity: f64,
+    pub refill_rate: f64,
 }
 
 #[derive(Debug, Deserialize)]

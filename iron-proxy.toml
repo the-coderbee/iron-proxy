@@ -6,6 +6,10 @@ port = 8080
 cert_path = "certs/cert.pem"
 key_path = "certs/key.pem"
 
+[rate_limit]
+capacity = 5.0
+refill_rate = 1.0
+
 [[clusters]]
 name = "main_web_pool"
 mode = "tcp"
