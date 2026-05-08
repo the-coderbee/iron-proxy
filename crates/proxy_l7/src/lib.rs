@@ -9,6 +9,7 @@ use hyper::{Request, Response, StatusCode, Uri};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use metrics::{counter, gauge, histogram};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use rate_limit::RateLimiter;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -114,6 +115,10 @@ impl L7Proxy {
         // generate uuid
         let request_id = uuid::Uuid::new_v4().to_string();
 
+        let req_method = req.method().clone();
+        let req_path = req.uri().path().to_string();
+
+        counter!("iron_proxy_requests_total", "method" => req_method.to_string(), "path" => req_path.clone()).increment(1);
         // rate limiting shield
         if let Some(limiter) = &rate_limiter
             && !limiter.check(client_addr.ip()).await
@@ -216,13 +221,13 @@ impl L7Proxy {
             hyper::header::HeaderValue::from_str(&backend_addr.to_string()).unwrap(),
         );
 
-        let req_method = req.method().clone();
-        let req_path = req.uri().path().to_string();
-
         // forward to backend
         match client.request(req).await {
             Ok(mut response) => {
                 let latency = start_time.elapsed();
+
+                histogram!("iron_proxy_request_duration_seconds").record(latency.as_secs_f64());
+                counter!("iron_proxy_responses_total", "status" => response.status().as_u16().to_string()).increment(1);
                 info!(
                     request_id = %request_id,
                     method = %req_method,
@@ -313,6 +318,7 @@ impl L7Proxy {
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, client_addr)) => {
+                            gauge!("iron_proxy_active_connections").increment(1.0);
                             let client = self.client.clone();
 
                             let proxy = self.clone();
@@ -345,6 +351,8 @@ impl L7Proxy {
                                     let io = TokioIo::new(stream);
                                     let _ = http1::Builder::new().serve_connection(io, service).await;
                                 }
+
+                                gauge!("iron_proxy_active_connections").decrement(1.0);
                             });
                         }
                         Err(e) => error!("Failed to accept connection: {}", e),

@@ -20,3 +20,4 @@ rustls-pemfile.workspace = true
 uuid.workspace = true
 arc-swap.workspace = true
 notify.workspace = true
+metrics.workspace = true

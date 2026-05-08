@@ -23,10 +23,12 @@ hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 bytes = "1.5"                                                              # hyper uses bytes for zero copy management
 reqwest = { version = "0.12", features = ["rustls-tls"] }
-rustls = { version = "0.23", features = ["ring"]}
+rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2.1"
 uuid = { version = "1.8", features = ["v4"] }
 axum = "0.7"
 arc-swap = "1.7"
 notify = "6.1"
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"

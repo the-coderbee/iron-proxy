@@ -1,6 +1,7 @@
 use axum::{Json, Router, extract::State, routing::get};
 use config::AdminConfig;
 use health::{HealthRegistry, HealthStatus};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use std::collections::HashMap;
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -8,6 +9,7 @@ use tracing::{error, info};
 #[derive(Clone)]
 struct AppState {
     registry: HealthRegistry,
+    metrics_handle: PrometheusHandle,
 }
 
 #[derive(serde::Serialize)]
@@ -17,11 +19,19 @@ struct SystemHealthResponse {
 }
 
 pub async fn start_admin_server(config: AdminConfig, registry: HealthRegistry) {
-    let state = AppState { registry };
+    let metrics_handle = PrometheusBuilder::new()
+        .install_recorder()
+        .expect("Failed to install Prometheus recorder");
+
+    let state = AppState {
+        registry,
+        metrics_handle,
+    };
 
     // define API routes
     let app = Router::new()
         .route("/api/v1/health", get(get_health_status))
+        .route("/metrics", get(get_metrics))
         .with_state(state);
 
     let bind_addr = format!("{}:{}", config.bind_addr, config.port);
@@ -72,4 +82,8 @@ async fn get_health_status(State(state): State<AppState>) -> Json<SystemHealthRe
         status: overall_status.to_string(),
         backends: backend_map,
     })
+}
+
+async fn get_metrics(State(state): State<AppState>) -> String {
+    state.metrics_handle.render()
 }
