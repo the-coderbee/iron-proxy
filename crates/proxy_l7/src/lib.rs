@@ -486,7 +486,7 @@ impl L7Proxy {
             "Waiting for {} active connections to drain...",
             active_connections.len()
         );
-        while let Some(_) = active_connections.join_next().await {}
+        while active_connections.join_next().await.is_some() {}
         info!("All connections cleanly drained. Iron-Proxy shutting down.");
 
         Ok(())
