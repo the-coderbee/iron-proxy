@@ -10,4 +10,6 @@ toml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
+metrics.workspace = true
 config = { path = "../config" }
+health = { path = "../health" }

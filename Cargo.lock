@@ -1411,6 +1411,8 @@ version = "3.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "config",
+ "health",
+ "metrics",
  "serde",
  "tokio",
  "toml",

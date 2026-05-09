@@ -9,6 +9,14 @@ pub struct ProxyConfig {
     // we expect a list of backend clusters
     #[serde(default)]
     pub clusters: Vec<ClusterConfig>,
+    pub tcp_servers: Vec<TcpServerConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TcpServerConfig {
+    pub bind_addr: String,
+    pub port: u16,
+    pub targets: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -40,9 +48,9 @@ pub struct AdminConfig {
 pub struct ClusterConfig {
     pub name: String,
     pub mode: ProxyMode,
-    #[serde(default = "default_routing")]
-    pub routing_strategy: String,
     pub targets: Vec<String>,
+    #[serde(default)]
+    pub max_retries: usize,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -50,10 +58,6 @@ pub struct ClusterConfig {
 pub enum ProxyMode {
     Tcp,
     Http,
-}
-
-fn default_routing() -> String {
-    "round_robin".to_string()
 }
 
 pub fn load_config<P: AsRef<Path>>(path: P) -> Result<ProxyConfig, Box<dyn std::error::Error>> {

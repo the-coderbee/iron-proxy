@@ -17,5 +17,10 @@ port = 9090
 [[clusters]]
 name = "main_web_pool"
 mode = "tcp"
-routing_strategy = "round_robin"
 targets = ["127.0.0.1:8081", "127.0.0.1:8082"]
+max_retries = 3
+
+[[tcp_servers]]
+bind_addr = "127.0.0.1"
+port = 6000
+targets = ["127.0.0.1:9000"]

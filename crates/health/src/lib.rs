@@ -68,7 +68,14 @@ impl HealthRegistry {
 }
 
 // spawn a background task for continuous health check
-pub fn start_health_check_loop(registry: HealthRegistry, interval: Duration) {
+pub fn start_health_check_loop(
+    registry: HealthRegistry,
+    interval: Duration,
+    http_targets: Vec<SocketAddr>,
+) {
+    // wrap http targets list in an Arc so we can cheaply share it across the ping tasks
+    let shared_http_targets = Arc::new(http_targets);
+
     // we spawn this on tokio runtime so it runs forever
     tokio::spawn(async move {
         // build http client with strictly 2 seconds timeout
@@ -88,41 +95,42 @@ pub fn start_health_check_loop(registry: HealthRegistry, interval: Duration) {
             for addr in backends {
                 let registry_clone = registry.clone();
                 let client_clone = client.clone();
+                let targets_clone = shared_http_targets.clone();
 
                 // spawn concurrent task for each ping so that a slow ping on A doesnt delay ping on B
                 tokio::spawn(async move {
-                    let url = format!("http://{}/", addr);
+                    // protocol aware ping
+                    let is_healthy = if targets_clone.contains(&addr) {
+                        // l7 HTTP health check
+                        let url = format!("http://{}/", addr);
+                        match client_clone.get(&url).send().await {
+                            Ok(response) => response.status().is_success(),
+                            Err(_) => false,
+                        }
+                    } else {
+                        // l4 TCP health check
+                        tokio::net::TcpStream::connect(&addr).await.is_ok()
+                    };
+                    // state eval & structured logging
+                    let currently_healthy =
+                        registry_clone.get_status(&addr).await == Some(HealthStatus::Healthy);
 
-                    match client_clone.get(&url).send().await {
-                        Ok(response) if response.status().is_success() => {
-                            // if it was previously dead log its recovery
-                            if registry_clone.get_status(&addr).await == Some(HealthStatus::Dead) {
-                                info!("Backend {} recovered. Marking as healthy", addr);
-                            }
-                            registry_clone.set_status(addr, HealthStatus::Healthy).await;
+                    if is_healthy {
+                        if !currently_healthy {
+                            info!(
+                                backend = %addr,
+                                "Backend recovered. Marking as healthy"
+                            );
                         }
-                        Ok(response) => {
-                            // backend responded but with a failing status code
-                            if registry_clone.get_status(&addr).await == Some(HealthStatus::Healthy)
-                            {
-                                info!(
-                                    "Backend {} returned status {}. Marking as dead",
-                                    addr,
-                                    response.status()
-                                );
-                            }
-                            registry_clone.set_status(addr, HealthStatus::Dead).await;
+                        registry_clone.set_status(addr, HealthStatus::Healthy).await;
+                    } else {
+                        if currently_healthy {
+                            info!(
+                                backend = %addr,
+                                "Backend health check failed. Marking as dead"
+                            );
                         }
-                        Err(e) => {
-                            if registry_clone.get_status(&addr).await == Some(HealthStatus::Healthy)
-                            {
-                                info!(
-                                    "Backend {} health check failed {}. Marking as dead",
-                                    addr, e
-                                );
-                            }
-                            registry_clone.set_status(addr, HealthStatus::Dead).await;
-                        }
+                        registry_clone.set_status(addr, HealthStatus::Dead).await;
                     }
                 });
             }

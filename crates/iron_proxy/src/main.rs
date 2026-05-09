@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
-use std::{process, time::Duration};
+use proxy_l4::L4Proxy;
+use std::{process, sync::Arc, time::Duration};
 use tracing::{error, info};
 
 #[derive(Parser)]
@@ -43,25 +44,43 @@ async fn main() {
             info!("Starting Iron-Proxy...");
             match config::load_config(config) {
                 Ok(cfg) => {
-                    // extract backend targets from config
-                    let targets = cfg
+                    // gather all targets (http + tcp)
+                    let mut backends = Vec::new();
+                    let http_addrs = Vec::new();
+
+                    // http targets
+                    let http_targets = cfg
                         .clusters
                         .first()
                         .map(|c| c.targets.clone())
                         .unwrap_or_default();
 
-                    let mut backends = Vec::new();
-                    for target in targets {
+                    for target in http_targets {
                         if let Ok(addr) = target.parse::<std::net::SocketAddr>() {
                             backends.push(addr);
                         }
                     }
 
+                    // TCP targets
+                    for tcp_server in &cfg.tcp_servers {
+                        for target in &tcp_server.targets {
+                            if let Ok(addr) = target.parse::<std::net::SocketAddr>() {
+                                backends.push(addr);
+                            }
+                        }
+                    }
+
+                    info!("Initializing health registry...");
+
                     // initialize health registry
                     let registry = health::HealthRegistry::new(&backends);
 
                     // start background health checker
-                    health::start_health_check_loop(registry.clone(), Duration::from_secs(5));
+                    health::start_health_check_loop(
+                        registry.clone(),
+                        Duration::from_secs(5),
+                        http_addrs,
+                    );
 
                     // start Admin API Control Plane
                     if let Some(admin_cfg) = cfg.admin.clone() {
@@ -73,7 +92,24 @@ async fn main() {
                         info!("No [admin] block found in config. Control Plane disabled.");
                     }
 
-                    info!("Initializing L7 HTTP Engine with active health checks...");
+                    // start L4 TCP Engine (background thread)
+                    for tcp_server in &cfg.tcp_servers {
+                        let config_clone = tcp_server.clone();
+                        let log_addr = config_clone.bind_addr.clone();
+
+                        info!("Initializing L4 Engine...");
+
+                        let l4_proxy = Arc::new(L4Proxy::new(config_clone, registry.clone()));
+
+                        tokio::spawn(async move {
+                            if let Err(e) = l4_proxy.run().await {
+                                error!("L4Proxy failed for {}: {}", log_addr, e);
+                            }
+                        });
+                    }
+
+                    // start L7 HTTP Engine (main thread)
+                    info!("Initializing L7 HTTP Engine...");
 
                     // Start the Data Plane
                     let proxy = std::sync::Arc::new(proxy_l7::L7Proxy::new(cfg, registry));

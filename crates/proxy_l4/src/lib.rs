@@ -1,19 +1,12 @@
-use config::ProxyConfig;
+use config::TcpServerConfig;
 use core::panic;
+use health::HealthRegistry;
+use metrics::{counter, gauge};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tracing::{error, info};
-
-pub struct L4Proxy {
-    config: Arc<ProxyConfig>,
-    backends: Vec<SocketAddr>,
-    // we use atomic usize so that multiple async tasks
-    // can update the counter without needing mutex lock
-    current_backend: AtomicUsize,
-}
 
 // listen for standard os termination signals (Ctrl+C or SIGTERM)
 async fn shutdown_signal() {
@@ -40,52 +33,39 @@ async fn shutdown_signal() {
     }
 }
 
+pub struct L4Proxy {
+    config: TcpServerConfig,
+    registry: HealthRegistry,
+    current_backend: AtomicUsize,
+}
+
 impl L4Proxy {
-    pub fn new(config: ProxyConfig) -> Self {
-        // for mvp, we simply grab the first cluster's targets.
-        // later we'll map multiple listeners to multiple clusters.
-        let targets = config
-            .clusters
-            .first()
-            .map(|c| c.targets.clone())
-            .unwrap_or_default();
-
-        let mut backends = Vec::new();
-        for target in targets {
-            match target.parse::<SocketAddr>() {
-                Ok(addr) => backends.push(addr),
-                Err(e) => error!("Failed to parse backend address '{}': {}", target, e),
-            }
-        }
-
-        if backends.is_empty() {
-            error!("No valid backend targets found in configuration!");
-            // in prod we'll panic or fail gracefully
-        } else {
-            info!("L4 Proxy loaded {} backend targets", backends.len());
-        }
-
+    pub fn new(config: TcpServerConfig, registry: HealthRegistry) -> Self {
         Self {
-            config: Arc::new(config),
-            backends,
+            config,
+            registry,
             current_backend: AtomicUsize::new(0),
         }
     }
 
     // safely fetch next backend for round robin
-    fn get_next_backend(&self) -> SocketAddr {
-        if self.backends.is_empty() {
-            panic!("Attempted to route traffic with an empty backend pool");
+    async fn get_next_backend(&self) -> Option<SocketAddr> {
+        let healthy = self.registry.get_healthy_backends().await;
+        let mut available = Vec::new();
+        for addr in healthy {
+            if self.config.targets.contains(&addr.to_string()) {
+                available.push(addr);
+            }
+        }
+        if available.is_empty() {
+            return None;
         }
         let idx = self.current_backend.fetch_add(1, Ordering::Relaxed);
-        self.backends[idx % self.backends.len()]
+        Some(available[idx % available.len()])
     }
 
     pub async fn run(&self) -> std::io::Result<()> {
-        let bind_addr = format!(
-            "{}:{}",
-            self.config.server.bind_addr, self.config.server.port
-        );
+        let bind_addr = format!("{}:{}", self.config.bind_addr, self.config.port);
         let listener = TcpListener::bind(&bind_addr).await?;
 
         info!("L4 Proxy Listening on {}", bind_addr);
@@ -98,48 +78,44 @@ impl L4Proxy {
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((mut inbound, client_addr)) => {
-                            if self.backends.is_empty() {
-                                error!("Dropping connection from {}: no backends available", client_addr);
-                                continue;
-                            }
+                            gauge!("iron_proxy_l4_active_connection").increment(1);
+                            counter!("iron_proxy_l4_connections_total").increment(1);
 
-                            let backend_addr = self.get_next_backend();
-                            info!(
-                                "Accepted connection from {}, routing to {}",
-                                client_addr, backend_addr
-                            );
+                            let backend_addr_opt = self.get_next_backend().await;
 
-                            // spawn dedicated task for this connection
-                            // so loop can accept next connection immediately.
-                            active_connections.spawn(async move {
-                                match TcpStream::connect(backend_addr).await {
-                                    Ok(mut outbound) => {
-                                        // copy biderectional handles shoveling bytes back and forth until either sides disconnect.
-                                        match tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await{
-                                            Ok((to_client, to_backend)) => {
-                                                info!(
-                                                    "Connection Closed! Wrote {} bytes to client, {} bytes to backend",
-                                                    to_client, to_backend
-                                                );
+
+                            if let Some(backend_addr) = backend_addr_opt {
+                                info!("Accepted L4 connection from {}, routing to {}", client_addr, backend_addr);
+                                // spawn dedicated task for this connection
+                                // so loop can accept next connection immediately.
+                                active_connections.spawn(async move {
+                                    match TcpStream::connect(backend_addr).await {
+                                        Ok(mut outbound) => {
+                                            // copy biderectional handles shoveling bytes back and forth until either sides disconnect.
+                                            match tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await{
+                                                Ok((to_client, to_backend)) => {
+                                                    info!(
+                                                        "L4 Connection Closed! Wrote {} bytes to client, {} bytes to backend",
+                                                        to_client, to_backend
+                                                    );
+                                                }
+                                                Err(e) => error!("Proxy stream error for {}: {}", client_addr, e),
                                             }
-                                            Err(e) => error!("Proxy stream error for {}: {}", client_addr, e),
                                         }
+                                        Err(e) => error!("Failed to connect to backend {}: {}", backend_addr, e),
                                     }
-                                    Err(e) => {
-                                        error!("Failed to connect to backend {}: {}", backend_addr, e);
-                                    }
-                                }
-                            });
+                                    gauge!("iron_proxy_l4_active_connections").decrement(1);
+                                });
+                            } else {
+                                error!("Dropping L4 connection from {}: No healthy backends available", client_addr);
+                                gauge!("iron_proxy_l4_active_connections").decrement(1);
+                            }
                         }
-                        Err(e) => {
-                            error!("Failed to accept connection: {}", e);
-                            // decision making on how to proceed
-                            // for now we will continue
-                        }
+                        Err(e) => error!("Failed to accept connection: {}", e),
                     }
                 }
                 _ = shutdown_signal() => {
-                    info!("Shutdown signal received. Stopping accepting connection...");
+                    info!("L4 Shutdown signal received. Stopping accepting connection...");
                     break;
                 }
             }
