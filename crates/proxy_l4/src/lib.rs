@@ -2,8 +2,8 @@ use config::TcpServerConfig;
 use core::panic;
 use health::HealthRegistry;
 use metrics::{counter, gauge};
+use router::ConnectionTracker;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tracing::{error, info};
@@ -36,15 +36,19 @@ async fn shutdown_signal() {
 pub struct L4Proxy {
     config: TcpServerConfig,
     registry: HealthRegistry,
-    current_backend: AtomicUsize,
+    tracker: ConnectionTracker,
 }
 
 impl L4Proxy {
-    pub fn new(config: TcpServerConfig, registry: HealthRegistry) -> Self {
+    pub fn new(
+        config: TcpServerConfig,
+        registry: HealthRegistry,
+        tracker: ConnectionTracker,
+    ) -> Self {
         Self {
             config,
             registry,
-            current_backend: AtomicUsize::new(0),
+            tracker,
         }
     }
 
@@ -60,8 +64,8 @@ impl L4Proxy {
         if available.is_empty() {
             return None;
         }
-        let idx = self.current_backend.fetch_add(1, Ordering::Relaxed);
-        Some(available[idx % available.len()])
+
+        self.tracker.get_best_l4(&available)
     }
 
     pub async fn run(&self) -> std::io::Result<()> {
@@ -78,7 +82,7 @@ impl L4Proxy {
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((mut inbound, client_addr)) => {
-                            gauge!("iron_proxy_l4_active_connection").increment(1);
+                            gauge!("iron_proxy_l4_active_connection").increment(1.0);
                             counter!("iron_proxy_l4_connections_total").increment(1);
 
                             let backend_addr_opt = self.get_next_backend().await;
@@ -88,6 +92,11 @@ impl L4Proxy {
                                 info!("Accepted L4 connection from {}, routing to {}", client_addr, backend_addr);
                                 // spawn dedicated task for this connection
                                 // so loop can accept next connection immediately.
+
+                                self.tracker.inc(backend_addr);
+
+                                let task_tracker = self.tracker.clone();
+
                                 active_connections.spawn(async move {
                                     match TcpStream::connect(backend_addr).await {
                                         Ok(mut outbound) => {
@@ -104,11 +113,12 @@ impl L4Proxy {
                                         }
                                         Err(e) => error!("Failed to connect to backend {}: {}", backend_addr, e),
                                     }
-                                    gauge!("iron_proxy_l4_active_connections").decrement(1);
+                                    task_tracker.dec(backend_addr);
+                                    gauge!("iron_proxy_l4_active_connections").decrement(1.0);
                                 });
                             } else {
                                 error!("Dropping L4 connection from {}: No healthy backends available", client_addr);
-                                gauge!("iron_proxy_l4_active_connections").decrement(1);
+                                gauge!("iron_proxy_l4_active_connections").decrement(1.0);
                             }
                         }
                         Err(e) => error!("Failed to accept connection: {}", e),

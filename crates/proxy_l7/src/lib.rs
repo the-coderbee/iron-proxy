@@ -13,13 +13,13 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use metrics::{counter, gauge, histogram};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use rate_limit::RateLimiter;
+use router::ConnectionTracker;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -92,13 +92,13 @@ async fn shutdown_signal() {
 pub struct L7Proxy {
     config: Arc<ArcSwap<ProxyConfig>>,
     registry: HealthRegistry,
-    current_backend: AtomicUsize,
+    tracker: ConnectionTracker,
     client: HttpClient,
     rate_limiter: Option<RateLimiter>,
 }
 
 impl L7Proxy {
-    pub fn new(config: ProxyConfig, registry: HealthRegistry) -> Self {
+    pub fn new(config: ProxyConfig, registry: HealthRegistry, tracker: ConnectionTracker) -> Self {
         // initialize the connection-pooling HTTP client
         let client = Client::builder(TokioExecutor::new()).build_http();
 
@@ -113,7 +113,7 @@ impl L7Proxy {
         Self {
             config: Arc::new(ArcSwap::from_pointee(config)),
             registry,
-            current_backend: AtomicUsize::new(0),
+            tracker,
             client,
             rate_limiter,
         }
@@ -141,8 +141,7 @@ impl L7Proxy {
             return None;
         }
 
-        let idx = self.current_backend.fetch_add(1, Ordering::Relaxed);
-        Some(available[idx % available.len()])
+        self.tracker.get_best_l7(&available)
     }
 
     // this is our core http handler. right now it just returms a 502.
@@ -260,6 +259,8 @@ impl L7Proxy {
                 }
             };
 
+            proxy.tracker.inc(backend_addr);
+
             info!(
                 request_id = %request_id,
                 method = %req_method,
@@ -311,6 +312,9 @@ impl L7Proxy {
                     }
 
                     let latency = start_time.elapsed();
+                    let latency_ms = latency.as_secs_f64() * 1000.0;
+
+                    proxy.tracker.dec_and_update_ewma(backend_addr, latency_ms);
 
                     histogram!("iron_proxy_request_duration_seconds").record(latency.as_secs_f64());
                     counter!("iron_proxy_responses_total", "status" => response.status().as_u16().to_string()).increment(1);
@@ -372,7 +376,7 @@ impl L7Proxy {
                         attempts += 1;
                         continue;
                     }
-
+                    proxy.tracker.dec(backend_addr);
                     warn!(
                         request_id = %request_id,
                         backend = %backend_addr,

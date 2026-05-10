@@ -5,11 +5,12 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+config = { path = "../config" }
+health = { path = "../health" }
+router = { path = "../router" }
 serde.workspace = true
 toml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
 metrics.workspace = true
-config = { path = "../config" }
-health = { path = "../health" }

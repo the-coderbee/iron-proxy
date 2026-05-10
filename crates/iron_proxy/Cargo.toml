@@ -10,6 +10,7 @@ health = { path = "../health" }
 proxy_l4 = { path = "../proxy_l4" }
 proxy_l7 = { path = "../proxy_l7" }
 admin = { path = "../admin" }
+router = { path = "../router" }
 clap.workspace = true
 tokio.workspace = true
 tracing.workspace = true

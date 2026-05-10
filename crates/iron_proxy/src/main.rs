@@ -74,6 +74,7 @@ async fn main() {
 
                     // initialize health registry
                     let registry = health::HealthRegistry::new(&backends);
+                    let tracker = router::ConnectionTracker::new();
 
                     // start background health checker
                     health::start_health_check_loop(
@@ -99,7 +100,11 @@ async fn main() {
 
                         info!("Initializing L4 Engine...");
 
-                        let l4_proxy = Arc::new(L4Proxy::new(config_clone, registry.clone()));
+                        let l4_proxy = Arc::new(L4Proxy::new(
+                            config_clone,
+                            registry.clone(),
+                            tracker.clone(),
+                        ));
 
                         tokio::spawn(async move {
                             if let Err(e) = l4_proxy.run().await {
@@ -112,12 +117,12 @@ async fn main() {
                     info!("Initializing L7 HTTP Engine...");
 
                     // Start the Data Plane
-                    let proxy = std::sync::Arc::new(proxy_l7::L7Proxy::new(cfg, registry));
+                    let l7_proxy = Arc::new(proxy_l7::L7Proxy::new(cfg, registry, tracker.clone()));
 
                     // start watching the config file
-                    proxy.clone().watch_config(config.clone());
+                    l7_proxy.clone().watch_config(config.clone());
 
-                    if let Err(e) = proxy.run().await {
+                    if let Err(e) = l7_proxy.run().await {
                         error!("Proxy failed: {}", e);
                         std::process::exit(1);
                     }

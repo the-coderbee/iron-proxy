@@ -8,6 +8,7 @@ authors.workspace = true
 config = { path = "../config" }
 health = { path = "../health" }
 rate_limit = { path = "../rate_limit" }
+router = { path = "../router" }
 tokio.workspace = true
 tracing.workspace = true
 hyper.workspace = true
