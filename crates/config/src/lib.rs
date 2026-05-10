@@ -51,6 +51,8 @@ pub struct ClusterConfig {
     pub targets: Vec<String>,
     #[serde(default)]
     pub max_retries: usize,
+    #[serde(default)]
+    pub sticky_sessions: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]

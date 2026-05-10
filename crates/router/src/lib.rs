@@ -1,5 +1,7 @@
 use dashmap::DashMap;
-use std::net::SocketAddr;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -94,7 +96,29 @@ impl ConnectionTracker {
 
     // routing algorithms
 
-    // l4 routing: strict least connections
+    pub fn get_sticky_backend(
+        &self,
+        client_ip: IpAddr,
+        healthy_backends: &[SocketAddr],
+    ) -> Option<SocketAddr> {
+        if healthy_backends.is_empty() {
+            return None;
+        }
+
+        // we must sort the backend alphabetically/numerically first!
+        // if we dont the registry might hand us list in random order
+        // which would break the deterministic hashing
+        let mut sorted_backends = healthy_backends.to_vec();
+        sorted_backends.sort();
+
+        let mut hasher = DefaultHasher::new();
+        client_ip.hash(&mut hasher);
+        let hash_value = hasher.finish();
+
+        let idx = (hash_value as usize) % sorted_backends.len();
+        Some(sorted_backends[idx])
+    }
+
     pub fn get_best_l4(&self, healthy_backends: &[SocketAddr]) -> Option<SocketAddr> {
         healthy_backends
             .iter()

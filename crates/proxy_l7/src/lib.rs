@@ -17,7 +17,7 @@ use router::ConnectionTracker;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::fs::File;
 use std::io::BufReader;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -119,16 +119,14 @@ impl L7Proxy {
         }
     }
 
-    async fn get_next_backend(&self) -> Option<SocketAddr> {
+    async fn get_next_backend(&self, client_ip: IpAddr) -> Option<SocketAddr> {
         let healthy_backends = self.registry.get_healthy_backends().await;
 
         // load config to see which targets actually belong to l7
         let cfg = self.config.load();
-        let http_targets = cfg
-            .clusters
-            .first()
-            .map(|c| c.targets.clone())
-            .unwrap_or_default();
+        let cluster = cfg.clusters.first()?;
+        let http_targets = &cluster.targets;
+        let is_sticky = cluster.sticky_sessions;
 
         let mut available = Vec::new();
         for addr in healthy_backends {
@@ -141,7 +139,11 @@ impl L7Proxy {
             return None;
         }
 
-        self.tracker.get_best_l7(&available)
+        if is_sticky {
+            self.tracker.get_sticky_backend(client_ip, &available)
+        } else {
+            self.tracker.get_best_l7(&available)
+        }
     }
 
     // this is our core http handler. right now it just returms a 502.
@@ -241,7 +243,7 @@ impl L7Proxy {
         let mut attempts = 0;
 
         loop {
-            let backend_addr_opt = proxy.get_next_backend().await;
+            let backend_addr_opt = proxy.get_next_backend(client_addr.ip()).await;
 
             let backend_addr = match backend_addr_opt {
                 Some(addr) => addr,

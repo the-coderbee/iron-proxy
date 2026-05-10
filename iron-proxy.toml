@@ -17,8 +17,9 @@ port = 9090
 [[clusters]]
 name = "main_web_pool"
 mode = "tcp"
-targets = ["127.0.0.1:8081", "127.0.0.1:8082"]
+targets = ["127.0.0.1:8081", "127.0.0.1:8082", "127.0.0.1:8083"]
 max_retries = 3
+sticky_sessions = true
 
 [[tcp_servers]]
 bind_addr = "127.0.0.1"
