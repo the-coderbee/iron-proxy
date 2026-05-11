@@ -1,12 +1,14 @@
 use config::TcpServerConfig;
-use core::panic;
 use health::HealthRegistry;
-use metrics::{counter, gauge};
 use router::ConnectionTracker;
-use std::net::SocketAddr;
+
+use metrics::{counter, gauge};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tracing::{error, info};
+
+use core::panic;
+use std::net::SocketAddr;
 
 // listen for standard os termination signals (Ctrl+C or SIGTERM)
 async fn shutdown_signal() {

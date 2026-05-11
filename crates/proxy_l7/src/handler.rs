@@ -1,0 +1,272 @@
+use crate::{L7Proxy, ProxyBody, text_body};
+use health::HealthStatus;
+
+use http_body_util::BodyExt;
+use hyper::body::Incoming;
+use hyper::header::HeaderValue;
+use hyper::{Request, Response, StatusCode};
+use metrics::{counter, histogram};
+use tracing::{error, info, warn};
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Instant;
+
+// this is our core http handler. right now it just returms a 502.
+// later, this will use a hyper::Client to forward the request.
+
+pub async fn handle_request(
+    req: Request<Incoming>,
+    client_addr: SocketAddr,
+    proxy: Arc<L7Proxy>,
+) -> Result<Response<ProxyBody>, hyper::Error> {
+    let start_time = Instant::now();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let req_method = req.method().clone();
+    let req_path = req.uri().path().to_string();
+    let client_ip = client_addr.ip().to_string();
+
+    counter!("iron_proxy_requests_total", "method" => req_method.to_string(), "path" => req_path.clone()).increment(1);
+    info!(
+        request_id = %request_id,
+        method = %req_method,
+        path = %req_path,
+        client_ip = %client_ip,
+        "Incoming request"
+    );
+
+    // rate limiting shield
+    if let Some(rl) = &proxy.rate_limiter
+        && !rl.check(client_addr.ip()).await
+    {
+        warn!(
+            request_id = %request_id,
+            client_ip = %client_addr.ip(),
+            "Rate Limit Exceeded! Dropping request."
+        );
+        counter!("iron_proxy_response_total", "status" => "429").increment(1);
+
+        let mut error_response = Response::new(text_body("Iron-Proxy: 429 Too Many Requests"));
+        *error_response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+        return Ok(error_response);
+    }
+
+    // body buffering
+    let cfg = proxy.config.load();
+    let max_retries = cfg.clusters.first().map(|c| c.max_retries).unwrap_or(0);
+
+    let (mut parts, body) = req.into_parts();
+    let body_bytes = body
+        .collect()
+        .await
+        .map(|b| b.to_bytes())
+        .unwrap_or_default();
+
+    // inject proxy headers into `parts` once
+    if let Some(existing) = parts.headers.get("x-forwarded-for") {
+        if let Ok(existing_str) = existing.to_str() {
+            let new_xff = format!("{}, {}", existing_str, client_ip);
+            parts
+                .headers
+                .insert("x-forwarded-for", HeaderValue::from_str(&new_xff).unwrap());
+        }
+    } else {
+        parts.headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_str(&client_ip).unwrap(),
+        );
+    }
+    parts
+        .headers
+        .insert("x-forwarded-proto", HeaderValue::from_static("https"));
+    parts
+        .headers
+        .insert("x-request-id", HeaderValue::from_str(&request_id).unwrap());
+
+    // remove standard hop-by-hop headers
+    let hop_by_hop = [
+        hyper::header::CONNECTION,
+        hyper::header::TE,
+        hyper::header::TRAILER,
+        hyper::header::TRANSFER_ENCODING,
+        hyper::header::UPGRADE,
+        hyper::header::HeaderName::from_static("keep-alive"),
+        hyper::header::HeaderName::from_static("proxy-authenticate"),
+        hyper::header::HeaderName::from_static("proxy-authorization"),
+    ];
+
+    if let Some(conn_header) = parts.headers.get(hyper::header::CONNECTION).cloned()
+        && let Ok(conn_str) = conn_header.to_str()
+    {
+        for h in conn_str.split(',') {
+            parts.headers.remove(h.trim());
+        }
+    }
+
+    for header in &hop_by_hop {
+        parts.headers.remove(header);
+    }
+
+    let mut attempts = 0;
+
+    loop {
+        let backend_addr_opt = proxy.get_next_backend(client_addr.ip()).await;
+
+        let backend_addr = match backend_addr_opt {
+            Some(addr) => addr,
+            None => {
+                error!(
+                    request_id = %request_id,
+                    client_ip = %client_ip,
+                    "No healthy backends available"
+                );
+                counter!("iron_proxy_response_total", "status" => "503").increment(1);
+                let mut error_response =
+                    Response::new(text_body("Iron-Proxy: 503 Service Unavailable"));
+                *error_response.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+                return Ok(error_response);
+            }
+        };
+
+        proxy.tracker.inc(backend_addr);
+
+        info!(
+            request_id = %request_id,
+            method = %req_method,
+            path = %req_path,
+            target = %backend_addr,
+            attempt = attempts + 1,
+            "Routing request"
+        );
+
+        let path_and_query = parts
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/");
+
+        let new_uri = format!("http://{}{}", backend_addr, path_and_query);
+
+        let mut attempt_req = Request::builder()
+            .method(parts.method.clone())
+            .uri(new_uri)
+            .version(parts.version);
+
+        for (k, v) in parts.headers.iter() {
+            attempt_req = attempt_req.header(k, v);
+        }
+
+        attempt_req = attempt_req.header(hyper::header::HOST, backend_addr.to_string());
+
+        let attempt_body = http_body_util::Full::new(body_bytes.clone())
+            .map_err(|never| match never {})
+            .boxed();
+
+        let final_req = attempt_req.body(attempt_body).unwrap();
+
+        // forward to backend
+        match proxy.client.request(final_req).await {
+            Ok(mut response) => {
+                if response.status().is_server_error() && attempts < max_retries {
+                    warn!(
+                        request_id = %request_id,
+                        backend = %backend_addr,
+                        status = response.status().as_u16(),
+                        attempt = attempts + 1,
+                        max_retries = max_retries,
+                        "Backend returned error, retrying..."
+                    );
+                    attempts += 1;
+                    continue;
+                }
+
+                let latency = start_time.elapsed();
+                let latency_ms = latency.as_secs_f64() * 1000.0;
+
+                proxy.tracker.dec_and_update_ewma(backend_addr, latency_ms);
+
+                histogram!("iron_proxy_request_duration_seconds").record(latency.as_secs_f64());
+                counter!("iron_proxy_responses_total", "status" => response.status().as_u16().to_string()).increment(1);
+                if response.status().is_server_error() {
+                    info!(
+                        request_id = %request_id,
+                        method = %req_method,
+                        path = %req_path,
+                        status = response.status().as_u16(),
+                        latency =latency.as_millis(),
+                        backend = %backend_addr,
+                        client_ip = %client_addr.ip(),
+                        "Exhausted retries, returning error"
+                    );
+                } else {
+                    info!(
+                        request_id = %request_id,
+                        method = %req_method,
+                        path = %req_path,
+                        status = response.status().as_u16(),
+                        latency =latency.as_millis(),
+                        backend = %backend_addr,
+                        client_ip = %client_addr.ip(),
+                        "Request successful."
+                    )
+                }
+
+                // strip hop-by-hop headers
+                // we also clean response before sending it to client
+                let res_headers = response.headers_mut();
+
+                res_headers.insert(
+                    "x-request-id",
+                    hyper::header::HeaderValue::from_str(&request_id).unwrap(),
+                );
+                if let Some(conn_header) = res_headers.get(hyper::header::CONNECTION).cloned()
+                    && let Ok(conn_str) = conn_header.to_str()
+                {
+                    for h in conn_str.split(',') {
+                        res_headers.remove(h.trim());
+                    }
+                }
+                for header in &hop_by_hop {
+                    res_headers.remove(header);
+                }
+
+                return Ok(response.map(|body| body.boxed()));
+            }
+            Err(e) => {
+                if attempts < max_retries {
+                    warn!(
+                        request_id = %request_id,
+                        backend = %backend_addr,
+                        error = %e,
+                        attempt = attempts + 1,
+                        max_retries = max_retries,
+                        "Backend network failed, retrying..."
+                    );
+                    attempts += 1;
+                    continue;
+                }
+                proxy.tracker.dec(backend_addr);
+                warn!(
+                    request_id = %request_id,
+                    backend = %backend_addr,
+                    "Passive check tripped! Marking backend as DEAD"
+                );
+                proxy
+                    .registry
+                    .set_status(backend_addr, HealthStatus::Dead)
+                    .await;
+
+                error!(
+                    request_id = %request_id,
+                    backend = %backend_addr,
+                    "Request failed after {} atempts", attempts + 1
+                );
+
+                counter!("iron_proxy_responses_total", "status" => "502").increment(1);
+                let mut err_response = Response::new(text_body("Iron-Proxy: 502 Bad Gateway"));
+                *err_response.status_mut() = StatusCode::BAD_GATEWAY;
+                return Ok(err_response);
+            }
+        }
+    }
+}

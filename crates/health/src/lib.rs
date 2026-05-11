@@ -1,10 +1,11 @@
+use tokio::sync::RwLock;
+use tokio::time;
+use tracing::info;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
-use tokio::time;
-use tracing::info;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HealthStatus {

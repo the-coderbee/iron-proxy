@@ -1,8 +1,9 @@
+use tokio::sync::RwLock;
+
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
 
 struct TokenBucket {
     capacity: f64,

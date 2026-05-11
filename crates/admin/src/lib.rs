@@ -1,10 +1,12 @@
-use axum::{Json, Router, extract::State, routing::get};
 use config::AdminConfig;
 use health::{HealthRegistry, HealthStatus};
+
+use axum::{Json, Router, extract::State, routing::get};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-use std::collections::HashMap;
 use tokio::net::TcpListener;
 use tracing::{error, info};
+
+use std::collections::HashMap;
 
 #[derive(Clone)]
 struct AppState {
