@@ -17,4 +17,6 @@ tracing.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
 daemonize.workspace = true
