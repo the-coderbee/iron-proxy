@@ -1,4 +1,5 @@
 /target
+certs/
 # Iron-Proxy runtime files
 *.pid
 *.out
