@@ -1,4 +1,6 @@
 mod cli;
+
+#[cfg(unix)]
 mod daemon;
 
 use cli::{Cli, Commands, DEFAULT_CONFIG};
@@ -40,7 +42,14 @@ fn main() {
             }
         }
         Commands::Stop => {
-            daemon::stop_background_process();
+            #[cfg(unix)]
+            {
+                daemon::stop_background_process();
+            }
+            #[cfg(not(unix))]
+            {
+                eprintln!("Daemon mode is not supported natively on Windows.");
+            }
             return;
         }
         Commands::Status { admin_url } => {
@@ -77,12 +86,38 @@ fn main() {
     let config_path = match &cli.command {
         Commands::Run { config } => config.clone(),
         Commands::Start { config } => {
-            // NEW: Delegate cleanly to your daemon module!
-            if let Err(e) = daemon::fork_to_background() {
-                eprintln!("{}", e);
+            #[cfg(unix)]
+            {
+                use daemonize::Daemonize;
+                use std::fs::File;
+
+                let stdout = File::create("iron-proxy.out").unwrap();
+                let stderr = File::create("iron-proxy.err").unwrap();
+
+                let daemonize = Daemonize::new()
+                    .pid_file("iron-proxy.pid")
+                    .working_directory(".")
+                    .stdout(stdout)
+                    .stderr(stderr);
+
+                match daemonize.start() {
+                    Ok(_) => config.clone(),
+                    Err(e) => {
+                        eprintln!("Error starting daemon: {}", e);
+                        process::exit(1);
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                eprintln!(
+                    "Daemon mode ('start' and 'stop') is restricted to Unix systems (Linux/macOS)."
+                );
+                eprintln!(
+                    "On Windows, please run Iron-Proxy in the foreground using: iron-proxy run"
+                );
                 process::exit(1);
             }
-            config.clone()
         }
         _ => unreachable!(),
     };

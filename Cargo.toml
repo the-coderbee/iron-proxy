@@ -33,4 +33,5 @@ notify = "6.1"
 metrics = "0.22"
 metrics-exporter-prometheus = "0.13"
 dashmap = "5.5"
+[target.'cfg(unix)'.dependencies]
 daemonize = "0.5"
