@@ -53,7 +53,7 @@ impl ConnectionTracker {
 
     // call this the instant a connection is established
     pub fn inc(&self, addr: SocketAddr) {
-        let entry = self.stats.entry(addr).or_insert_with(BackendStats::new);
+        let entry = self.stats.entry(addr).or_default();
         entry.active_requests.fetch_add(1, Ordering::Relaxed);
     }
 
