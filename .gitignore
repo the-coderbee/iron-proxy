@@ -1,1 +1,9 @@
 /target
+certs/
+# Iron-Proxy runtime files
+*.pid
+*.out
+*.err
+
+# actual config file
+iron-proxy.toml

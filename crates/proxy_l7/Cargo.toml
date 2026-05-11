@@ -1,0 +1,24 @@
+[package]
+name = "proxy_l7"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+config = { path = "../config" }
+health = { path = "../health" }
+rate_limit = { path = "../rate_limit" }
+router = { path = "../router" }
+tokio.workspace = true
+tracing.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+uuid.workspace = true
+arc-swap.workspace = true
+notify.workspace = true
+metrics.workspace = true

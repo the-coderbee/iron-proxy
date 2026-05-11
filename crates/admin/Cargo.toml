@@ -1,0 +1,16 @@
+[package]
+name = "admin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+config = { path = "../config" }
+health = { path = "../health" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum.workspace = true
+tracing.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
