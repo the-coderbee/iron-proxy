@@ -1,0 +1,53 @@
+name: Build and Release
+
+# This workflow only triggers when you push a Git tag that starts with "v" (e.g., v4.0.0)
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-upload:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    
+    # The Matrix Strategy: Run this job 3 times concurrently on 3 different OS environments!
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_name: iron-proxy
+            asset_name: iron-proxy-linux-amd64
+            
+          - os: macos-latest
+            target: aarch64-apple-darwin # Compiles natively for Apple Silicon (M1/M2/M3)
+            bin_name: iron-proxy
+            asset_name: iron-proxy-macos-arm64
+            
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_name: iron-proxy.exe
+            asset_name: iron-proxy-windows-amd64.exe
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build Release Binary
+        # We explicitly target the iron_proxy executable crate
+        run: cargo build --release --target ${{ matrix.target }} -p iron_proxy
+
+      - name: Upload Binary to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/${{ matrix.target }}/release/${{ matrix.bin_name }}
+          name: Release ${{ github.ref_name }}
+          # This automatically creates a draft release on your GitHub page with the binaries attached
+          draft: false 
+          generate_release_notes: true
