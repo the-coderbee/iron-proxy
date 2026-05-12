@@ -88,25 +88,11 @@ fn main() {
         Commands::Start { config } => {
             #[cfg(unix)]
             {
-                use daemonize::Daemonize;
-                use std::fs::File;
-
-                let stdout = File::create("iron-proxy.out").unwrap();
-                let stderr = File::create("iron-proxy.err").unwrap();
-
-                let daemonize = Daemonize::new()
-                    .pid_file("iron-proxy.pid")
-                    .working_directory(".")
-                    .stdout(stdout)
-                    .stderr(stderr);
-
-                match daemonize.start() {
-                    Ok(_) => config.clone(),
-                    Err(e) => {
-                        eprintln!("Error starting daemon: {}", e);
-                        process::exit(1);
-                    }
+                if let Err(e) = daemon::fork_to_background() {
+                    eprintln!("Error starting background process: {}", e);
+                    process::exit(1);
                 }
+                config.clone()
             }
             #[cfg(not(unix))]
             {
