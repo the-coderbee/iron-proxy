@@ -16,9 +16,10 @@ jobs:
       - uses: actions/checkout@v4
       
       # Install stable Rust toolchain
-      - name: Install Rust
+      - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.94"
           components: rustfmt, clippy
           
       # Cache dependencies to speed up builds
