@@ -2,9 +2,9 @@
 
 # Iron-Proxy
 
-[![CI Pipeline](https://github.com/thecoderbee/iron-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/thecoderbee/iron-proxy/actions/workflows/ci.yml)
-[![Release Pipeline](https://github.com/thecoderbee/iron-proxy/actions/workflows/release.yml/badge.svg)](https://github.com/thecoderbee/iron-proxy/actions/workflows/release.yml)
-[![Latest Release](https://img.shields.io/github/v/release/thecoderbee/iron-proxy?color=blue&label=version)](https://github.com/thecoderbee/iron-proxy/releases/latest)
+[![CI Pipeline](https://github.com/the-coderbee/iron-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/thecoderbee/iron-proxy/actions/workflows/ci.yml)
+[![Release Pipeline](https://github.com/the-coderbee/iron-proxy/actions/workflows/release.yml/badge.svg)](https://github.com/thecoderbee/iron-proxy/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/the-coderbee/iron-proxy?color=blue&label=version)](https://github.com/thecoderbee/iron-proxy/releases/latest)
 ![Language](https://img.shields.io/badge/Language-Rust-f5a34e)
 [![Documentation](https://img.shields.io/badge/docs-mdBook-orange.svg)](https://the-coderbee.github.io/iron-proxy/)
 ![License](https://img.shields.io/badge/License-MIT-blue)
