@@ -1,8 +1,12 @@
 # 🛡️ Iron-Proxy
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/thecoderbee/iron-proxy/release.yml?branch=main)
-![Version](https://img.shields.io/github/v/tag/thecoderbee/iron-proxy?label=version)
+# Iron-Proxy
+
+[![CI Pipeline](https://github.com/thecoderbee/iron-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/thecoderbee/iron-proxy/actions/workflows/ci.yml)
+[![Release Pipeline](https://github.com/thecoderbee/iron-proxy/actions/workflows/release.yml/badge.svg)](https://github.com/thecoderbee/iron-proxy/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/thecoderbee/iron-proxy?color=blue&label=version)](https://github.com/thecoderbee/iron-proxy/releases/latest)
 ![Language](https://img.shields.io/badge/Language-Rust-f5a34e)
+[![Documentation](https://img.shields.io/badge/docs-mdBook-orange.svg)](https://the-coderbee.github.io/iron-proxy/)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 A high-performance, concurrent, dual-engine (L4/L7) reverse proxy and load balancer engineered in Rust. 
