@@ -1,6 +1,10 @@
 # Stage 1: Build
 FROM rust:1.87-slim AS builder
 WORKDIR /app
+
+# Install pkg-config and OpenSSL dependencies
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
 COPY . .
 RUN cargo build --release -p iron_proxy
 
