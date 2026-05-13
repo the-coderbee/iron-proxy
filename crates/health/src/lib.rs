@@ -1,3 +1,9 @@
+//! # Active Health Checking
+//!
+//! This crate manages asynchronous, background health checks for all downstream
+//! backend servers. It maintains a highly concurrent, lock-free registry of cluster
+//! health states, ensuring the proxy immediately stops routing traffic to degraded nodes.
+
 use tokio::sync::RwLock;
 use tokio::time;
 use tracing::info;
@@ -7,19 +13,27 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Represents the current operational state of a backend server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HealthStatus {
+    /// The server is accepting connections and responding successfully.
     Healthy,
+    /// The server is unresponsive, timing out, or returning 5xx error.
     Dead,
     // we can add draining and unknown later
 }
 
+/// A highly concurrent, lock-free registry of backend health states.
+///
+/// Wraps a `DashMap` to allow hundreds of Tokio tasks to read cluster health
+/// simultaneously without suffering from lock contention.
 #[derive(Clone)]
 pub struct HealthRegistry {
     statuses: Arc<RwLock<HashMap<SocketAddr, HealthStatus>>>,
 }
 
 impl HealthRegistry {
+    /// Initializes a new registry and marks all provided backends as `Healthy` by default.
     pub fn new(backends: &[SocketAddr]) -> Self {
         let mut map = HashMap::new();
 
@@ -33,7 +47,7 @@ impl HealthRegistry {
         }
     }
 
-    // update the health status of specific backend
+    /// Safely updates the health state of a specific backend.
     pub async fn set_status(&self, addr: SocketAddr, status: HealthStatus) {
         let mut map = self.statuses.write().await;
         if let Some(current) = map.get_mut(&addr) {
@@ -41,13 +55,15 @@ impl HealthRegistry {
         }
     }
 
-    // retrieve status of a specific backend
+    /// Queries the current health state of a backend.
+    ///
+    /// Returns `None` if the backend address is completely unknown to the registry.
     pub async fn get_status(&self, addr: &SocketAddr) -> Option<HealthStatus> {
         let map = self.statuses.read().await;
         map.get(addr).copied()
     }
 
-    // returns a snapshot of only the healthy backends
+    /// Retrieves a snapshot list containing only the addresses of healthy backends.
     pub async fn get_healthy_backends(&self) -> Vec<SocketAddr> {
         let map = self.statuses.read().await;
         map.iter()
@@ -61,14 +77,23 @@ impl HealthRegistry {
             .collect()
     }
 
-    // helper function to get all the backends regardless of their health
+    /// Retrieves a list of all backend addresses currently tracked by the proxy.
     pub async fn get_all_backends(&self) -> Vec<SocketAddr> {
         let map = self.statuses.read().await;
         map.keys().copied().collect()
     }
 }
 
-// spawn a background task for continuous health check
+/// Spawns a background Tokio task that continuously pings backends.
+///
+/// This loop runs independently of the main proxy engines. It performs Layer 7 (HTTP)
+/// health checks for addresses in the `http_targets` list, and Layer 4 (TCP) checks for all others.
+///
+/// * Arguments
+///
+/// * `registry` - A cloned reference to the global health registry.
+/// * `interval` - How frequently to ping the backends.
+/// * `http_targets` - A list of addresses to monitor via HTTP GET.
 pub fn start_health_check_loop(
     registry: HealthRegistry,
     interval: Duration,

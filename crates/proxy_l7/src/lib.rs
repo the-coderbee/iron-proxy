@@ -1,3 +1,9 @@
+//! # Layer 7 Proxy Engine
+//!
+//! This crate implements a highly concurrent, asynchronous HTTP reverse proxy.
+//! It manages TLS termination, configuration hot-reloading, and server lifecycles,
+//! while delegating individual HTTP request processing to the `handler` module.
+
 mod handler;
 
 use config::ProxyConfig;
@@ -26,13 +32,13 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
 
+/// A standardized boxed HTTP body used throughout the Proxy.
 pub type ProxyBody = BoxBody<Bytes, hyper::Error>;
 
-// a type alias for our http client to keep code clean
+/// A type alias for the connection-pooling legacy HTTP client.
 type HttpClient = Client<HttpConnector, ProxyBody>;
 
-// helper to create a boxed empty body
-// we will use it later
+/// Creates an empty body for generic HTTP responses.
 #[allow(dead_code)]
 fn empty_body() -> BoxBody<Bytes, hyper::Error> {
     Empty::<Bytes>::new()
@@ -40,20 +46,21 @@ fn empty_body() -> BoxBody<Bytes, hyper::Error> {
         .boxed()
 }
 
-// helper to create a boxed body with text
+/// Creates a standard text body for explicit HTTP proxy errors.
 fn text_body(text: &'static str) -> BoxBody<Bytes, hyper::Error> {
     Full::new(Bytes::from(text))
         .map_err(|never| match never {})
         .boxed()
 }
 
-// TLS helper function
+/// Loads a chain of X.509 certificates from a PEM file.
 fn load_certs(path: &str) -> std::io::Result<Vec<CertificateDer<'static>>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
     rustls_pemfile::certs(&mut reader).collect::<std::io::Result<Vec<_>>>()
 }
 
+/// Loads a private key from a PEM file.
 fn load_private_key(path: &str) -> std::io::Result<PrivateKeyDer<'static>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -65,7 +72,7 @@ fn load_private_key(path: &str) -> std::io::Result<PrivateKeyDer<'static>> {
     })
 }
 
-// Listen for standard OS termination signals (Ctrl+C or SIGTERM)
+/// Asynchronously waits for a system shutdown signal (Ctrl+C or SIGTERM).
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -90,6 +97,7 @@ async fn shutdown_signal() {
     }
 }
 
+/// The core struct representing the Layer 7 HTTP proxy instance.
 pub struct L7Proxy {
     pub(crate) config: Arc<ArcSwap<ProxyConfig>>,
     pub(crate) registry: HealthRegistry,
@@ -99,6 +107,13 @@ pub struct L7Proxy {
 }
 
 impl L7Proxy {
+    /// Initializes a new instance of the L7 HTTP Proxy.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The initial proxy configuration representing routing rules and rate limits.
+    /// * `registry` - The cloned reference to the global health registry.
+    /// * `tracker` - The cloned reference to the connection tracker.
     pub fn new(config: ProxyConfig, registry: HealthRegistry, tracker: ConnectionTracker) -> Self {
         // initialize the connection-pooling HTTP client
         let client = Client::builder(TokioExecutor::new()).build_http();
@@ -120,6 +135,7 @@ impl L7Proxy {
         }
     }
 
+    /// Queries the registry and tracker to find the best backend based on Peak EWMA or Sticky IP.
     async fn get_next_backend(&self, client_ip: IpAddr) -> Option<SocketAddr> {
         let healthy_backends = self.registry.get_healthy_backends().await;
 
@@ -147,6 +163,12 @@ impl L7Proxy {
         }
     }
 
+    /// Starts the main event loop for listening to HTTP/HTTPs connections.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `std::io::Error` if the proxy fails to bind the specified port,
+    /// or if invalid TLS certificates are provided.
     pub async fn run(self: Arc<Self>) -> std::io::Result<()> {
         let cfg = self.config.load();
         let bind_addr = format!("{}:{}", cfg.server.bind_addr, cfg.server.port);
@@ -241,6 +263,14 @@ impl L7Proxy {
         Ok(())
     }
 
+    /// Spawns a background task that listens for filesystem modifications to the config.
+    ///
+    /// When changes are detected, it atomically swaps the global configuration `ArcSwap`
+    /// without dropping active connections.
+    ///
+    /// # Arguments
+    ///
+    /// * `config_path` - The path to the `iron-proxy` configuration file to monitor.
     pub fn watch_config(self: Arc<Self>, config_path: String) {
         tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();

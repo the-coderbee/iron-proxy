@@ -1,3 +1,10 @@
+//! # Layer 4 Proxy Engine
+//!
+//! This crate implements a high-performance, raw TCP byte-streaming proxy.
+//! It seamlessly routes incoming TCP connections to upstream backends using a
+//! Least Connections strategy, providing zero-downtime graceful shutdowns and
+//! bidirectional byte shoveling.
+
 use config::TcpServerConfig;
 use health::HealthRegistry;
 use router::ConnectionTracker;
@@ -10,7 +17,7 @@ use tracing::{error, info};
 use core::panic;
 use std::net::SocketAddr;
 
-// listen for standard os termination signals (Ctrl+C or SIGTERM)
+/// Asynchronously waits for a system shutdown signal (Ctrl+C or SIGTERM).
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -35,6 +42,7 @@ async fn shutdown_signal() {
     }
 }
 
+/// The core struct representing a Layer 4 TCP proxy instance.
 pub struct L4Proxy {
     config: TcpServerConfig,
     registry: HealthRegistry,
@@ -42,6 +50,13 @@ pub struct L4Proxy {
 }
 
 impl L4Proxy {
+    /// Initialize a new instance of l$ Proxy.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The TCP server configuration.
+    /// * `registry` - The health registry for backend monitoring.
+    /// * `tracker` - The connection tracker for managing active connections.
     pub fn new(
         config: TcpServerConfig,
         registry: HealthRegistry,
@@ -54,7 +69,7 @@ impl L4Proxy {
         }
     }
 
-    // safely fetch next backend for round robin
+    /// Queries the registry and tracker to find the best available upstream backend.
     async fn get_next_backend(&self) -> Option<SocketAddr> {
         let healthy = self.registry.get_healthy_backends().await;
         let mut available = Vec::new();
@@ -70,6 +85,16 @@ impl L4Proxy {
         self.tracker.get_best_l4(&available)
     }
 
+    /// Starts the main event loop for accepting and routing TCP connections.
+    ///
+    /// This method runs indefinitely until a shutdown signal is received. Upon receiving
+    /// a signal, it stops accepting new connections and gracefully waits for all active
+    /// byte streams to drain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `std::io::Error` if proxy fails to bind to the configured local
+    /// port or address.
     pub async fn run(&self) -> std::io::Result<()> {
         let bind_addr = format!("{}:{}", self.config.bind_addr, self.config.port);
         let listener = TcpListener::bind(&bind_addr).await?;

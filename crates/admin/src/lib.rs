@@ -1,3 +1,9 @@
+//! # Administrative Control Plane
+//!
+//! This crate provides the internal HTTP API for Iron-Proxy. It exposes endpoints
+//! for real-time observability, including cluster health status and Prometheus metrics.
+//! The server runs asynchronously on its own Tokio task using `axum` framework.
+
 use config::AdminConfig;
 use health::{HealthRegistry, HealthStatus};
 
@@ -8,18 +14,38 @@ use tracing::{error, info};
 
 use std::collections::HashMap;
 
+/// Shared application state injected into Axum route handlers.
+///
+/// This struct is cheaply cloneable and provides thread-safe access to the global
+/// health registry and the Prometheus metrics recorder.
 #[derive(Clone)]
 struct AppState {
+    /// The global registry tracking backend health states.
     registry: HealthRegistry,
+    /// The handle used to render currently collected metrics.
     metrics_handle: PrometheusHandle,
 }
 
+/// The JSON response schema for the `/api/v1/health` endpoint.
 #[derive(serde::Serialize)]
 struct SystemHealthResponse {
+    /// The overall health of the cluster (e.g., "OK", "Degraded", "No backends Configured").
     status: String,
+    /// A map of the backend addresses to their current operational state (e.g., "Healthy", "Dead").
     backends: HashMap<String, String>,
 }
 
+/// Starts the administrative API server in the background.
+///
+/// This function installs the global Prometheus recorder and binds an `axum`
+/// web server to the address specified in the `AdminConfig`. It exposes two primary routes:
+/// * `/api/v1/health` - Cluster health summary.
+/// * `/metrics` - Raw Prometheus metrics telemetry.
+///
+/// # Arguments
+///
+/// * `config` - The configuration specifying the bind address and port.
+/// * `registry` - The cloned reference to the global health registry.
 pub async fn start_admin_server(config: AdminConfig, registry: HealthRegistry) {
     let metrics_handle = PrometheusBuilder::new()
         .install_recorder()
@@ -49,6 +75,11 @@ pub async fn start_admin_server(config: AdminConfig, registry: HealthRegistry) {
     }
 }
 
+/// Route handler for `GET /api/v1/health`.
+///
+/// Aggregates the real-time status of all active backends tracked by the proxy.
+/// If any single backend is marked as `Dead`, the overall cluster status is
+/// reported as `Degraded`.
 async fn get_health_status(State(state): State<AppState>) -> Json<SystemHealthResponse> {
     // get all known backends
     let all_backends = state.registry.get_all_backends().await;
@@ -86,6 +117,10 @@ async fn get_health_status(State(state): State<AppState>) -> Json<SystemHealthRe
     })
 }
 
+/// Route handler for `GET /metrics`.
+///
+/// Renders the current state of all recorded counters, gauges, and histograms
+/// into a Prometheus-compatible plain-text format.
 async fn get_metrics(State(state): State<AppState>) -> String {
     state.metrics_handle.render()
 }

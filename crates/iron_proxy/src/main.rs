@@ -1,3 +1,9 @@
+//! # Iron-Proxy Primary Executable
+//!
+//! This is the entry point for the Iron-Proxy binary. It acts as the central orchestrator,
+//! parsing command-line arguments via the `cli` module, managing OS-level background
+//! execution via the `daemon` module, and ultimately booting the asynchronous Tokio
+//! runtime to run the Layer 4 and 7 Proxy Engines.
 mod cli;
 
 #[cfg(unix)]
@@ -15,6 +21,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{path::Path, process};
 
+/// The primary entry point for the application.
+///
+/// This function parses the user's CLI command and dictates the lifecycle of the proxy.
+/// It configures observability, builds the health registry, and spawns the required
+/// Tokio tasks for the Admin API, L4 proxy listeners, and L7 HTTP servers.
 fn main() {
     let cli = Cli::parse();
 
