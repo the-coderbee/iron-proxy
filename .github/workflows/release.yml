@@ -1,6 +1,5 @@
 name: Build and Release
 
-# This workflow only triggers when you push a Git tag that starts with "v" (e.g., v4.0.0)
 on:
   push:
     tags:
@@ -14,7 +13,6 @@ jobs:
     permissions:
       contents: write
     
-    # The Matrix Strategy: Run this job 3 times concurrently on 3 different OS environments!
     strategy:
       matrix:
         include:
@@ -24,7 +22,7 @@ jobs:
             asset_name: iron-proxy-linux-amd64
             
           - os: macos-latest
-            target: aarch64-apple-darwin # Compiles natively for Apple Silicon (M1/M2/M3)
+            target: aarch64-apple-darwin
             bin_name: iron-proxy
             asset_name: iron-proxy-macos-arm64
             
@@ -43,7 +41,6 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build Release Binary
-        # We explicitly target the iron_proxy executable crate
         run: cargo build --release --target ${{ matrix.target }} -p iron_proxy
 
       - name: Upload Binary to GitHub Releases
@@ -51,6 +48,51 @@ jobs:
         with:
           files: target/${{ matrix.target }}/release/${{ matrix.bin_name }}
           name: Release ${{ github.ref_name }}
-          # This automatically creates a draft release on your GitHub page with the binaries attached
           draft: false 
           generate_release_notes: true
+
+  docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    # Waits for all 3 binary builds to succeed before building the image
+    needs: build-and-upload
+
+    permissions:
+      contents: read
+      packages: write  # Required to push to GHCR
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}  # No extra secrets needed!
+
+      - name: Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            # Tag with the version e.g. v4.0.2
+            type=ref,event=tag
+            # Also tag as latest
+            type=raw,value=latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Caches layers between runs to speed up builds
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
